@@ -224,14 +224,14 @@ public partial class MainWindow : Window
 
     private void OnClosePlayStart(object sender, RoutedEventArgs e) => _vm.ClosePlayStart();
 
-    // NOOB_FROM_FILE (owner 2026-11-08): a Noob career from a save folder on this PC
-    private void OnPlayStartFromFile(object sender, RoutedEventArgs e) => _vm.PlayStartFromFile();
-
-    private async void OnConfirmFileStart(object sender, RoutedEventArgs e) => await _vm.ConfirmFileStartAsync();
-
-    private void OnCancelFileStart(object sender, RoutedEventArgs e) => _vm.CancelFileStart();
-
     private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
+
+    // OD-239: the old Noob cloud save's one-time export and the old local folder
+    private void OnOpenOldNoobExport(object sender, RoutedEventArgs e) => _vm.OpenOldNoobExport();
+
+    private void OnPickOldNoobExport(object sender, RoutedEventArgs e) => _vm.PickOldNoobExportFolder();
+
+    private void OnOpenOldNoobFolder(object sender, RoutedEventArgs e) => _vm.OpenOldNoobFolder();
 
     // Owner 2026-11-08: the FRIENDS sidebar (header toggle)
     private void OnToggleFriends(object sender, RoutedEventArgs e) => _vm.ToggleFriends();
@@ -252,12 +252,6 @@ public partial class MainWindow : Window
     private void OnAcceptFriendInvite(object sender, RoutedEventArgs e) => _vm.AcceptFriendInvite((FriendCard)((FrameworkElement)sender).DataContext);
 
     private async void OnDeclineFriendInvite(object sender, RoutedEventArgs e) => await _vm.DeclineFriendInviteAsync((FriendCard)((FrameworkElement)sender).DataContext);
-
-    private async void OnConvertProfile(object sender, RoutedEventArgs e) => await _vm.AskConvertAsync(((ProfileRow)((FrameworkElement)sender).DataContext).Profile);
-
-    private async void OnConfirmConvert(object sender, RoutedEventArgs e) => await _vm.ConfirmConvertAsync();
-
-    private void OnCancelConvert(object sender, RoutedEventArgs e) => _vm.CancelConvert();
 
     /// <summary>CR-S61: the typed confirmation opens below the list and is scrolled into view.</summary>
     private async void OnDownloadCareer(object sender, RoutedEventArgs e) => await _vm.DownloadCareerAsync((ProfileRow)((FrameworkElement)sender).DataContext);

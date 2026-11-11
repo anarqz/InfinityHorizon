@@ -601,7 +601,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         if (!OfflineMode && _session?.Me is { Players: not null } board)
         {
             // OD-214: the account's profiles (both modes) with the chosen game's career on each; local-only rows as before
-            // fix 2026-11-08: a Noob career whose folder holds a save (a Hardcore copy waiting for its first upload) is started, not "fresh"
+            // OD-239: an Azimuth career that exists is started (it plays the player's own Azimuth save)
             var built = new List<ProfileRow>();
             foreach (var card in ProfileBoard.Build(board, CurrentGame, BoardFlagsNow(board)))
             {
@@ -616,7 +616,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             // owner 2026-11-10: in place (a row that did not change keeps its drawing and its instance)
             ListSync.Sync(ProfileRows, built, SameProfileRow, SameProfileRowKey);
             // W12 (handoff §10, D): signed in the list is the cloud's; this PC's local profiles are hidden, never deleted (offline lists
-            // them; a Noob career starts from this PC's saves through "Start from a save on this PC")
+            // them)
             if (_startRow?.Card is { } open)
                 _startRow = ProfileRows.FirstOrDefault(r => r.Card?.Player.ProfileId == open.Player.ProfileId && r.Card.Startable);
             ChangedProfileList();
@@ -636,8 +636,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>The board's flags of the current game (or of the Profiles row's game being read, <see cref="InGame"/>): this PC's files and the server's switches.</summary>
-    private BoardFlags BoardFlagsNow(Me board) => new(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, HasAzimuthSaves(), SeedPendingXuids(board),
-        LocalSaveXuids(), UsableNoobSources(board.Profiles).Count > 0);
+    private BoardFlags BoardFlagsNow(Me board) => new(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, SeedPendingXuids(board));
 
     private void ChangedProfileList()
     {
@@ -651,7 +650,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         Changed(nameof(NewHardcore));
         Changed(nameof(ProfilesText));
         ChangedSeedForm();
-        ChangedNoobSeedForm();
         FillWebsiteSwitches(); // CR-L47: the account page's switches follow the same /me
         FillPlayBoard(); // owner 2026-11-08: PLAY's two buttons follow the same /me and game (no request)
     }

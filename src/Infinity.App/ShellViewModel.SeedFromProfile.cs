@@ -11,7 +11,7 @@ namespace Infinity.App;
 /// <summary>One profile a Hardcore profile may start from, as the screens list it.</summary>
 public sealed record SeedSourceRow(Profile Profile)
 {
-    public string Name => ProfileName.Plain(Profile.Gamertag) + " · " + (Profile.Mode == "hardcore" ? "HARDCORE" : "NOOB");
+    public string Name => ProfileName.Plain(Profile.Gamertag) + " · " + (Profile.Mode == "hardcore" ? "HARDCORE" : "AZIMUTH");
 
     /// <summary>The source lists show the item's text.</summary>
     public override string ToString() => Name;

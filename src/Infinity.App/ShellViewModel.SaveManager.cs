@@ -504,18 +504,14 @@ public sealed partial class ShellViewModel
             : !Games.Any(g => g.Id == game.Id) ? S["play.tile_not_in_install"]
             : Playing ? S["play.session_active"] : null;
         var canDeleteCareer = card?.CareerRow is not null;
-        // NOOB_FROM_FILE: a Noob profile of a game with Noob careers (catalog data) may start its career from a save folder on this PC
-        var fromFile = slot == SaveSlot.Noob && card is not null && card.State != CareerState.NotOffered;
-        foreach (var id in ProfileTools.CareerMenu(facts.Started, SaveChips.CanDownload(chip) && game.CloudSaves, canDeleteCareer, fromFile))
+        foreach (var id in ProfileTools.CareerMenu(facts.Started, SaveChips.CanDownload(chip) && game.CloudSaves, canDeleteCareer, hardcore: slot == SaveSlot.Hardcore))
         {
             var action = id switch
             {
                 ProfileTools.CopyTo => LocalSaveOf(card!.Player.Xuid) is not null
                     ? new MenuAction(id, S["sm.menu.copy_azimuth"], !running, running ? S["sm.block.GameRunning"] : null)
                     : new MenuAction(id, S["sm.menu.copy_azimuth"], false, S["sm.block.NoSource"]),
-                ProfileTools.StartOther => StartOtherAction(slot, game),
-                ProfileTools.FromFile => new MenuAction(id, S["save_file.menu"], !running && !Playing && _install is not null,
-                    running || Playing ? S["sm.block.GameRunning"] : _install is null ? S["play.setup_needed"] : null),
+                ProfileTools.StartOther => StartOtherAction(game),
                 ProfileTools.History => new MenuAction(id, S["sm.menu.history"], true),
                 ProfileTools.Resolve => SaveChips.NeedsResolve(chip)
                     ? new MenuAction(id, S["sm.resolve"], true) : new MenuAction(id, S["sm.resolve"], false, S["sm.menu.resolve_nothing"]),
@@ -528,11 +524,14 @@ public sealed partial class ShellViewModel
         return list;
     }
 
-    /// <summary>"Start my {other mode} profile from this": the other profile's career of this game starts from this one (PLAY's inline choice).</summary>
-    private MenuAction StartOtherAction(SaveSlot slot, GameDefinition game)
+    /// <summary>
+    /// An Azimuth row's "Start my HARDCORE profile from this": the Hardcore career of this game starts from this one through the §4.10 check
+    /// (PLAY's inline choice). OD-239: no career ever starts an Azimuth one, so a Hardcore row offers no such item.
+    /// </summary>
+    private MenuAction StartOtherAction(GameDefinition game)
     {
-        var otherMode = slot == SaveSlot.Hardcore ? "noob" : "hardcore";
-        var otherWord = ModeWord(slot == SaveSlot.Hardcore ? SaveSlot.Noob : SaveSlot.Hardcore);
+        const string otherMode = "hardcore";
+        var otherWord = ModeWord(SaveSlot.Hardcore);
         var label = S.Format("sm.menu.start_other", ("mode", otherWord));
         var other = ProfileRows.Where(r => r.Card?.Player.Mode == otherMode).Select(r => r.Card!).ToList();
         if (other.Count == 0) return new MenuAction(ProfileTools.StartOther, label, false, S.Format("sm.row.no_other_profile", ("mode", otherWord)));
@@ -586,24 +585,26 @@ public sealed partial class ShellViewModel
     private SaveChipKind ChipOf(BoardCard card)
     {
         if (card.State != CareerState.Started) return SaveChipKind.None;
+        // OD-239: an Azimuth career has no cloud save: its chip is this PC's only (never a sync, a resolve or a download)
+        var cloudSaves = CurrentGame.CloudSaves && card.Player.Mode == "hardcore";
         string? content = null; SyncMark? mark = null; var pending = false; KeptThisPc? kept = null;
         if (ulong.TryParse(card.Player.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid) && SavesRootNow is { } root)
         {
             try
             {
                 if (NewestSealedOf(CloudSaveFiles.ProfileDir(root, xuid)) is { } newest)
-                    content = CurrentGame.CloudSaves ? ContentDigestOf(CurrentGame, newest) : "local";
+                    content = cloudSaves ? ContentDigestOf(CurrentGame, newest) : "local";
             }
             catch (Exception e) when (e is SaveException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException) { content = "unreadable"; }
-            if (CurrentGame.CloudSaves && CloudSaveClient() is { } client && client.Saves.State(xuid) is { } state)
+            if (cloudSaves && CloudSaveClient() is { } client && client.Saves.State(xuid) is { } state)
             {
                 mark = state.Mark;
                 pending = state.PendingUpload is not null && state.PendingUpload.Kind != CommitKinds.SeedFromProfile;
             }
-            if (CurrentGame.CloudSaves)
+            if (cloudSaves)
                 kept = KeptThisPcFor(CurrentGame.Id, xuid, card.Career?.Cloud?.Revision is long r and > 0 ? (ulong)r : null, content);
         }
-        return SaveChips.Of(new SaveChipInput(card.State, CurrentGame.CloudSaves, card.Career?.Cloud?.Revision, content, mark, pending, card.SeedPending, kept));
+        return SaveChips.Of(new SaveChipInput(card.State, cloudSaves, card.Career?.Cloud?.Revision, content, mark, pending, card.SeedPending, kept));
     }
 
     private string ChipText(SaveChipKind kind, Career? career) => kind switch
@@ -818,9 +819,6 @@ public sealed partial class ShellViewModel
             case ProfileTools.StartOther:
                 StartOtherProfileFrom(row);
                 break;
-            case ProfileTools.FromFile:
-                StartFromFileOfRow(row);
-                break;
             case ProfileTools.History:
                 await OpenHistoryAsync(slot);
                 break;
@@ -847,10 +845,11 @@ public sealed partial class ShellViewModel
     /// </summary>
     private void StartOtherProfileFrom(ProfileRow source)
     {
-        var otherMode = source.Hardcore ? "noob" : "hardcore";
+        if (source.Hardcore) return; // OD-239: an Azimuth career starts fresh only
+        const string otherMode = "hardcore";
         if (ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == otherMode && r.Card.Startable) is not { } target)
         {
-            Message = S.Format("sm.row.no_other_profile", ("mode", ModeWord(source.Hardcore ? SaveSlot.Noob : SaveSlot.Hardcore)));
+            Message = S.Format("sm.row.no_other_profile", ("mode", ModeWord(SaveSlot.Hardcore)));
             return;
         }
         _playAfterStart = false;
@@ -877,52 +876,37 @@ public sealed partial class ShellViewModel
     private SlotFacts Facts()
     {
         var hc = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
-        var noob = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "noob");
         return new SlotFacts(
             hc is not null, hc?.Card?.CareerRow is not null, hc is not null && LocalSaveOf(hc.Profile.Xuid) is not null,
-            noob is not null, noob?.Card?.CareerRow is not null, noob is not null && LocalSaveOf(noob.Profile.Xuid) is not null,
-            AzimuthSave() is not null, _gameRunning, CurrentGame.FullFeatures, CurrentGame.HardcoreCareers,
-            ProfileSeed.Offered(ServerAllowsSeedFromProfile, HardcoreKeepsCloud));
+            AzimuthSave() is not null, _gameRunning, CurrentGame.FullFeatures, CurrentGame.HardcoreCareers);
     }
 
     // ------------------------------------------------------------------ Start (§2.6, OD-214)
 
     public string StartSub => S["sm.start_sub"];
 
-    public string StartFreshHint => S.Format("sm.start.fresh_hint", ("game", GameLabel));
+    /// <summary>OD-239: an Azimuth career's one start plays the player's own Azimuth save.</summary>
+    public string StartFreshHint => S.Format(CareerStartHardcore ? "sm.start.fresh_hint" : "sm.start.azimuth_hint", ("game", GameLabel));
 
     /// <summary>
-    /// "From my NOOB/HARDCORE profile" (§2.6): a HARDCORE card starts from the NOOB career through the CR-S52 check; a NOOB card (fix
-    /// 2026-11-08, owner 2026-10-28) from the HARDCORE career's save, no check. Always shown; disabled with the reason when not possible.
+    /// "From my AZIMUTH profile" (§2.6): a HARDCORE card starts from the Azimuth career through the CR-S52 check. Shown on a HARDCORE card
+    /// only (OD-239: an Azimuth career starts fresh only); disabled with the reason when not possible.
     /// </summary>
-    public bool ShowStartFromProfile => StartCard is not null;
+    public bool ShowStartFromProfile => StartCard is not null && CareerStartHardcore;
+
+    /// <summary>"From this PC's save" is a HARDCORE card's disabled choice with its B2 reason; an Azimuth card has nothing else to offer.</summary>
+    public bool ShowStartFromPc => StartCard is not null && CareerStartHardcore;
 
     public string StartFromProfileLabel => S.Format("sm.start.from_profile", ("mode", ModeWord(CareerStartHardcore ? SaveSlot.Noob : SaveSlot.Hardcore)));
 
-    public string StartFromProfileHint => CareerStartHardcore
-        ? CareerStartFromExisting ? CareerStartExistingHint
-            : !CurrentGame.FullFeatures ? S.Format("sm.start.cloudless", ("game", GameLabel))
-            : S.Format("sm.start.from_profile_off", ("mode", ModeWord(SaveSlot.Noob)), ("game", GameLabel))
-        : NoobStartHint();
-
-    public bool StartFromProfileEnabled => (CareerStartHardcore ? CareerStartFromExisting : CareerStartFromHardcore) && Idle;
-
-    /// <summary>What the Noob's "From my HARDCORE profile" will do (copy this PC's save, or download the cloud's), or why it cannot.</summary>
-    private string NoobStartHint()
-    {
-        if (_startRow is not { } row) return string.Empty;
-        var facts = NoobFacts();
-        var plans = NoobStart.Usable(CurrentGame, facts, NoobCloudReachable);
-        var plan = plans is [var first, ..] ? first : NoobStart.Plan(CurrentGame, FirstFact(facts), NoobCloudReachable);
-        return NoobPlanText(plan, facts.FirstOrDefault(f => f.Hardcore.ProfileId == plan.Hardcore?.ProfileId) ?? FirstFact(facts), row.Gamertag);
-    }
-
-    public bool StartFromPcEnabled => !CareerStartHardcore && CareerStartFromExisting && Idle;
-
-    public string StartFromPcHint => CareerStartHardcore ? S["sm.start.from_pc_hc"]
-        : CareerStartFromExisting ? S.Format("sm.start.from_pc_hint", ("game", GameLabel))
+    public string StartFromProfileHint => !CareerStartHardcore ? string.Empty
+        : CareerStartFromExisting ? CareerStartExistingHint
         : !CurrentGame.FullFeatures ? S.Format("sm.start.cloudless", ("game", GameLabel))
-        : S.Format("sm.start.from_pc_none", ("game", GameLabel));
+        : S.Format("sm.start.from_profile_off", ("mode", ModeWord(SaveSlot.Noob)), ("game", GameLabel));
+
+    public bool StartFromProfileEnabled => CareerStartHardcore && CareerStartFromExisting && Idle;
+
+    public string StartFromPcHint => S["sm.start.from_pc_hc"];
 
     public Brush StartAccent => SlotBrushes.Accent(CareerStartHardcore ? SaveSlot.Hardcore : SaveSlot.Noob);
 
@@ -1017,7 +1001,7 @@ public sealed partial class ShellViewModel
         Done(S["sm.kept_pc"]); // the prototype's Keep this PC lands on Done, as Keep cloud does
     }
 
-    private static string ModeWordIn(ProfileRow row) => row.Hardcore ? "HARDCORE" : "NOOB";
+    private static string ModeWordIn(ProfileRow row) => row.Hardcore ? "HARDCORE" : "AZIMUTH";
 
     // ------------------------------------------------------------------ Manage saves (§4)
 
@@ -1057,9 +1041,10 @@ public sealed partial class ShellViewModel
         SlotCards.Clear();
         var facts = Facts();
         var needsServer = false;
-        foreach (var slot in new[] { SaveSlot.Hardcore, SaveSlot.Azimuth, SaveSlot.Noob })
+        // OD-239: two slots; the AZIMUTH profile plays the Azimuth slot (the player's own save) and has no cloud slot
+        foreach (var slot in new[] { SaveSlot.Hardcore, SaveSlot.Azimuth })
         {
-            var row = slot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (slot == SaveSlot.Hardcore ? "hardcore" : "noob"));
+            var row = slot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
             var title = slot == SaveSlot.Azimuth ? S["sm.slot.pc"] : S.Format("sm.slot.cloud", ("mode", ModeWord(slot)));
             string headline, detail;
             if (slot == SaveSlot.Azimuth)
@@ -1077,7 +1062,7 @@ public sealed partial class ShellViewModel
             }
             var targets = CopyTargets.Of(slot, facts);
             var actions = targets.Select(t => new MenuAction("copy:" + t.To,
-                t.Block == CopyBlock.StartInstead ? S.Format("sm.start_instead", ("mode", ModeWord(t.To))) : S.Format("sm.copy_to", ("slot", t.To == SaveSlot.Azimuth ? S["sm.azimuth_short"] : ModeWord(t.To))),
+                S.Format("sm.copy_to", ("slot", t.To == SaveSlot.Azimuth ? S["sm.azimuth_short"] : ModeWord(t.To))),
                 t.Enabled, t.Enabled ? null : BlockText(t.Block))).ToList();
             actions.Add(new MenuAction("history", S["sm.menu.history"], true));
             // one page note says why copies into existing cloud careers are off (needs MACBOOK); the card lists only its other reasons
@@ -1119,21 +1104,9 @@ public sealed partial class ShellViewModel
         if (!action.Enabled) { if (action.Reason is { } why) Message = why; return; }
         if (action.Id == "history") { await OpenHistoryAsync(slot.Slot); return; }
         if (!Enum.TryParse<SaveSlot>(action.Id["copy:".Length..], out var to)) return;
-        var block = CopyTargets.Of(slot.Slot, Facts()).First(t => t.To == to).Block;
-        if (block == CopyBlock.StartInstead)
-        {
-            if (slot.Slot == SaveSlot.Azimuth || to == SaveSlot.Noob || to == SaveSlot.Hardcore)
-            {
-                var target = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (to == SaveSlot.Hardcore ? "hardcore" : "noob") && r.Card.Startable);
-                if (target is null) return;
-                PickProfileRow(target);
-                if (_startRow is not null) SavesGo(SavesScreen.Start);
-            }
-            return;
-        }
-        if (to != SaveSlot.Azimuth) return;
-        if (slot.Slot == SaveSlot.Azimuth) return;
-        var row = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (slot.Slot == SaveSlot.Hardcore ? "hardcore" : "noob"));
+        if (CopyTargets.Of(slot.Slot, Facts()).FirstOrDefault(t => t.To == to) is not { Enabled: true }) return;
+        if (to != SaveSlot.Azimuth || slot.Slot != SaveSlot.Hardcore) return;
+        var row = ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore");
         if (row is not null) OpenCopyFromProfile(slot.Slot, row);
     }
 
@@ -1269,7 +1242,6 @@ public sealed partial class ShellViewModel
     public string HistoryTitle => S.Format("sm.history_title", ("slot", ModeWord(_historySlot)));
     public bool HistoryHardcoreOn => _historySlot == SaveSlot.Hardcore;
     public bool HistoryAzimuthOn => _historySlot == SaveSlot.Azimuth;
-    public bool HistoryNoobOn => _historySlot == SaveSlot.Noob;
     public bool HistoryEmpty => HistoryRows.Count == 0;
     public HistoryRow? HistorySelected => _historySelected;
     public bool HasHistorySelected => _historySelected is not null;
@@ -1290,10 +1262,11 @@ public sealed partial class ShellViewModel
     public async Task OpenHistoryAsync(SaveSlot slot)
     {
         RefreshGameRunning();
+        if (slot == SaveSlot.Noob) slot = SaveSlot.Azimuth; // OD-239: the AZIMUTH profile has no cloud history; it plays Azimuth's own save
         _historySlot = slot;
         SavesGo(SavesScreen.History);
         // cached revisions render at once (no request, no overlay); a first read shows the overlay
-        var row = slot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (slot == SaveSlot.Hardcore ? "hardcore" : "noob"));
+        var row = slot == SaveSlot.Hardcore ? ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore") : null;
         if (row is null || row.Card?.CareerRow is null || _remote.TryGet<IReadOnlyList<SaveRevision>>(RevisionsKey(CurrentGame.Id, row.Profile.Xuid), out _))
             await FillHistoryAsync();
         else await RunOrStep(S["busy.history"], FillHistoryAsync);
@@ -1301,7 +1274,7 @@ public sealed partial class ShellViewModel
 
     public Task ShowHistorySlotAsync(SaveSlot slot)
     {
-        _historySlot = slot;
+        _historySlot = slot == SaveSlot.Noob ? SaveSlot.Azimuth : slot;
         return FillHistoryAsync();
     }
 
@@ -1322,7 +1295,8 @@ public sealed partial class ShellViewModel
         HistoryRows.Clear();
         _historySelected = null;
         var rows = new List<(DateTimeOffset At, HistoryRow Row)>();
-        var row = _historySlot == SaveSlot.Azimuth ? null : ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == (_historySlot == SaveSlot.Hardcore ? "hardcore" : "noob"));
+        // OD-239: only the HARDCORE slot has cloud revisions; the Azimuth slot is this PC's history only
+        var row = _historySlot == SaveSlot.Hardcore ? ProfileRows.FirstOrDefault(r => r.Card?.Player.Mode == "hardcore") : null;
         if (SafeHistory() is { } history)
         {
             // owner 2026-11-10: the entries are read and each one's newest save verified (every file hashed) on a worker
@@ -1430,7 +1404,7 @@ public sealed partial class ShellViewModel
         var name = ModeWord(_historySlot) + " · " + r.Origin + " · " + r.When;
         if (r.Cloud && r.Revision is { } rev)
         {
-            var row = ProfileRows.FirstOrDefault(p => p.Card?.Player.Mode == (_historySlot == SaveSlot.Hardcore ? "hardcore" : "noob"));
+            var row = _historySlot == SaveSlot.Hardcore ? ProfileRows.FirstOrDefault(p => p.Card?.Player.Mode == "hardcore") : null;
             if (row is null || ParseXuid(row.Profile) is not { } xuid) return;
             OpenCopy(new CopyPlan(_historySlot, name, null, null, rev, xuid, false));
         }
@@ -1457,7 +1431,7 @@ public sealed partial class ShellViewModel
             var history = new LocalHistory(_stateRoot, game, Version);
             history.EnsureOriginal(root, DateTime.UtcNow);
             var key = allGames ? "sm.reason.delete_profile" : "sm.reason.delete_career";
-            var mode = row.Mode == "hardcore" ? "HARDCORE" : "NOOB";
+            var mode = row.Mode == "hardcore" ? "HARDCORE" : "AZIMUTH";
             var reason = new HistoryReason(StringsIn("en").Format(key, ("mode", mode), ("game", game.Name)), StringsIn("pt-BR").Format(key, ("mode", mode), ("game", game.Name)));
             var item = history.Archive(allGames ? "delete-profile" : "delete-career", folder, reason, DateTime.UtcNow,
                 profile: new HistoryProfile(row.Xuid, ProfileName.Plain(row.Gamertag), row.Mode));
@@ -1510,7 +1484,7 @@ public sealed partial class ShellViewModel
         if (_seedOffer?.Source is not { Mode: "noob" } source) return;
         CloseSeedChoice();
         SavesHome();
-        Log($"saves: refused HARDCORE start, playing {source.ProfileId} as NOOB");
+        Log($"saves: refused HARDCORE start, playing {source.ProfileId} as AZIMUTH");
         ChooseProfile(source);
         Message = S.Format("sm.check.as_noob_done", ("name", ProfileName.Plain(source.Gamertag)));
     }
@@ -1528,7 +1502,7 @@ public sealed partial class ShellViewModel
         Changed(nameof(HistoryTitle));
         Changed(nameof(HistoryHardcoreOn));
         Changed(nameof(HistoryAzimuthOn));
-        Changed(nameof(HistoryNoobOn));
+
         Changed(nameof(HistoryEmpty));
         Changed(nameof(HistorySelected));
         Changed(nameof(HasHistorySelected));
@@ -1558,8 +1532,9 @@ public sealed partial class ShellViewModel
             nameof(CopyFromSide), nameof(CopyToSide), nameof(CopyTitle), nameof(CopySub), nameof(CopyNote), nameof(CanConfirmCopy),
             nameof(CopyBlockedText), nameof(ShowCopyBlocked), nameof(DoneText), nameof(ManageSub), nameof(HistorySizeText),
             nameof(ShowStartFromProfile), nameof(StartFromProfileLabel), nameof(StartFromProfileHint), nameof(StartFromProfileEnabled),
-            nameof(StartFromPcEnabled), nameof(StartFromPcHint), nameof(StartFreshHint), nameof(StartAccent),
+            nameof(ShowStartFromPc), nameof(StartFromPcHint), nameof(StartFreshHint), nameof(StartAccent),
         }) Changed(name);
+        ChangedExport(); // OD-239: the old Noob line's banner and screen follow the same /me
         ChangedHistory();
     }
 }

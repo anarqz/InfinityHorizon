@@ -18,7 +18,7 @@ public enum SavesScreen
     /// <summary>Cloud vs this PC, side by side.</summary>
     Resolve,
 
-    /// <summary>The three slots (HARDCORE · Azimuth · NOOB) with Copy to… and History.</summary>
+    /// <summary>The two slots (HARDCORE · Azimuth) with Copy to… and History (OD-239: the Azimuth profile plays Azimuth's own save).</summary>
     Manage,
 
     /// <summary>Compare → (Check) → Confirm of one copy.</summary>
@@ -35,6 +35,9 @@ public enum SavesScreen
 
     /// <summary>A finished action: "Back to Saves".</summary>
     Done,
+
+    /// <summary>OD-239: "Export my old Noob save" (the AZIMUTH profile's old cloud line, to a file) and its old local folder.</summary>
+    Export,
 }
 
 /// <summary>
@@ -212,7 +215,10 @@ public enum ResolvePick
     ThisPc,
 }
 
-/// <summary>The three save slots of a game (§1).</summary>
+/// <summary>
+/// The save slots of a game (§1). <see cref="Noob"/> is the AZIMUTH profile's card on the save home (wire mode <c>noob</c>, OD-239); it has
+/// no slot of its own on Manage, Copy or History: that profile plays <see cref="Azimuth"/>, the player's own Azimuth save.
+/// </summary>
 public enum SaveSlot
 {
     Hardcore,
@@ -226,8 +232,6 @@ public enum CopyBlock
     /// <summary>Offered: a copy (Compare → Check → Confirm).</summary>
     None,
 
-    /// <summary>Offered as "Start the other profile from this": the destination has no career of the game yet (CAREERS §6.7).</summary>
-    StartInstead,
 
     /// <summary>The game is running: Azimuth's save is not written now.</summary>
     GameRunning,
@@ -247,17 +251,14 @@ public enum CopyBlock
     /// <summary>The game allows no HARDCORE career (FM5 until M11, §6.2).</summary>
     NotOffered,
 
-    /// <summary>HARDCORE never starts from this PC's own Azimuth save (B2); only the other profile's career, through the check.</summary>
+    /// <summary>HARDCORE never starts from this PC's own Azimuth save (B2).</summary>
     NoHardcoreFromLocal,
-
-    /// <summary>The server does not allow a HARDCORE career from a profile (<c>saves.hardcoreFromProfile</c> off, or no cloud line).</summary>
-    CheckOff,
 }
 
 /// <summary>One destination of "Copy to…".</summary>
 public sealed record CopyTarget(SaveSlot To, CopyBlock Block)
 {
-    public bool Enabled => Block is CopyBlock.None or CopyBlock.StartInstead;
+    public bool Enabled => Block == CopyBlock.None;
 }
 
 /// <summary>What the slots hold on this PC and the account, for <see cref="CopyTargets.Of"/>.</summary>
@@ -265,65 +266,40 @@ public sealed record SlotFacts(
     bool HardcoreProfile,
     bool HardcoreCareer,
     bool HardcoreLocal,
-    bool NoobProfile,
-    bool NoobCareer,
-    bool NoobLocal,
     bool AzimuthLocal,
     bool GameRunning,
     bool CloudSaves,
-    bool HardcoreCareers,
-    bool HardcoreFromProfile);
+    bool HardcoreCareers);
 
 /// <summary>
 /// "Copy to…" (§2.1): the destinations of a slot, the valid ones enabled. Only Azimuth (this PC) is written by a copy today; a cloud career
-/// that exists cannot be written by the launcher until the server's copy route exists (CAREERS §6.13), and a cloud career that does not
-/// exist yet is started from the source instead (CR-S52 for HARDCORE, the OD-41 picker for NOOB).
+/// that exists cannot be written by the launcher until the server's copy route exists (CAREERS §6.13), and a HARDCORE career never starts
+/// from this PC's own Azimuth save (B2). OD-239: there are two slots, HARDCORE and Azimuth.
 /// </summary>
 public static class CopyTargets
 {
     public static IReadOnlyList<CopyTarget> Of(SaveSlot from, SlotFacts f)
     {
         ArgumentNullException.ThrowIfNull(f);
-        var list = new List<CopyTarget>(2);
-        foreach (var to in new[] { SaveSlot.Hardcore, SaveSlot.Azimuth, SaveSlot.Noob })
-        {
-            if (to == from) continue;
-            list.Add(new CopyTarget(to, Block(from, to, f)));
-        }
-        return list;
+        if (from == SaveSlot.Noob) throw new ArgumentOutOfRangeException(nameof(from), "the Azimuth profile has no slot of its own (OD-239)");
+        var to = from == SaveSlot.Hardcore ? SaveSlot.Azimuth : SaveSlot.Hardcore;
+        return [new CopyTarget(to, Block(to, f))];
     }
 
-    private static bool HasLocal(SaveSlot slot, SlotFacts f) => slot switch
-    {
-        SaveSlot.Hardcore => f.HardcoreLocal,
-        SaveSlot.Noob => f.NoobLocal,
-        _ => f.AzimuthLocal,
-    };
-
-    private static bool HasCareer(SaveSlot slot, SlotFacts f) => slot == SaveSlot.Hardcore ? f.HardcoreCareer : f.NoobCareer;
-
-    private static CopyBlock Block(SaveSlot from, SaveSlot to, SlotFacts f)
+    private static CopyBlock Block(SaveSlot to, SlotFacts f)
     {
         if (to == SaveSlot.Azimuth)
         {
             if (f.GameRunning) return CopyBlock.GameRunning;
-            return HasLocal(from, f) ? CopyBlock.None : CopyBlock.NoSource;
+            return f.HardcoreLocal ? CopyBlock.None : CopyBlock.NoSource;
         }
-        if (!(to == SaveSlot.Hardcore ? f.HardcoreProfile : f.NoobProfile)) return CopyBlock.NoProfile;
-        if (to == SaveSlot.Hardcore && !f.HardcoreCareers) return CopyBlock.NotOffered;
+        if (!f.HardcoreProfile) return CopyBlock.NoProfile;
+        if (!f.HardcoreCareers) return CopyBlock.NotOffered;
         if (!f.CloudSaves) return CopyBlock.NoCloudSaves;
-        if (HasCareer(to, f)) return CopyBlock.NeedsServer;
-        if (to == SaveSlot.Hardcore)
-        {
-            if (from == SaveSlot.Azimuth) return CopyBlock.NoHardcoreFromLocal;
-            if (!f.HardcoreFromProfile) return CopyBlock.CheckOff;
-            return f.NoobCareer ? CopyBlock.StartInstead : CopyBlock.NoSource;
-        }
-        if (f.GameRunning) return CopyBlock.GameRunning;
-        return HasLocal(from, f) ? CopyBlock.StartInstead : CopyBlock.NoSource;
+        if (f.HardcoreCareer) return CopyBlock.NeedsServer;
+        return CopyBlock.NoHardcoreFromLocal;
     }
 }
-
 /// <summary>One line of the HARDCORE check's step list (§2.5).</summary>
 public enum CheckStepState
 {
@@ -349,7 +325,7 @@ public static class HardcoreCheck
         _ => [CheckStepState.Done, CheckStepState.Failed, CheckStepState.Waiting], // nothing was decided (rate limit, server, network)
     };
 
-    /// <summary>A refusal offers its ways out (§2.5): "Start a fresh HARDCORE career" and "Play it as NOOB".</summary>
+    /// <summary>A refusal offers its ways out (§2.5): "Start a fresh HARDCORE career" and "Play it as AZIMUTH".</summary>
     public static bool OffersWaysOut(SeedCheckOutcome? outcome) => outcome is SeedCheckOutcome.Refused or SeedCheckOutcome.SourceUsed;
 }
 

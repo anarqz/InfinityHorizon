@@ -10,8 +10,8 @@ namespace Infinity.App;
 
 /// <summary>
 /// OD-214 (CAREERS.md §4, §6.7, §6.18): sign in → pick a game → pick a profile. A profile without a career of the chosen game (or with an
-/// empty one) opens the Start panel instead of being chosen: Fresh, or from an existing profile (Hardcore: the account's other profile's
-/// career of the same game through the SAVES_API §4.10 check; Noob: a save on this PC, the OD-41 picker). The career is created empty
+/// empty one) opens the Start panel instead of being chosen: Fresh, or (Hardcore) from the account's other profile's career of the same
+/// game through the SAVES_API §4.10 check; an Azimuth career (OD-239) starts fresh only, on the player's own Azimuth save. The career is created empty
 /// first (<c>POST /players/{xuid}/careers</c>, one key per profile and game until answered; 409 <c>CAREER_EXISTS</c> continues), and the
 /// gate is set only once the career exists.
 /// </summary>
@@ -83,60 +83,15 @@ public sealed partial class ShellViewModel
     /// <summary>"Start fresh": the career exists (created or already there), then it is chosen; a Hardcore one starts from scratch (§4.9).</summary>
     public Task StartCareerFreshAsync() => StartCareerAsync(fromExisting: false);
 
-    /// <summary>"Start from an existing profile" (Hardcore, the §4.10 check) or "from a save on this PC" (Noob, the OD-41 picker).</summary>
+    /// <summary>"Start from an existing profile" (Hardcore, the §4.10 check).</summary>
     public Task StartCareerFromExistingAsync() => StartCareerAsync(fromExisting: true);
 
-    /// <summary>A Noob card offers "From my HARDCORE profile" (the account's Hardcore career of the game has a save).</summary>
-    public bool CareerStartFromHardcore => StartCard?.Offers.FromHardcore == true;
-
-    /// <summary>The Start screen's "From my NOOB/HARDCORE profile": the §4.10 check for a Hardcore card, the Hardcore copy for a Noob one.</summary>
-    public Task StartCareerFromProfileAsync() => CareerStartHardcore ? StartCareerAsync(fromExisting: true) : StartNoobCareerFromHardcoreAsync();
-
-    /// <summary>
-    /// Fix 2026-11-08 (SAVE_MANAGER_UX §2.6): a Noob career of the chosen game starts from the account's Hardcore career of the same game.
-    /// The source is checked first (nothing is created without one); then the career exists (POST .../careers), the Hardcore save is copied
-    /// (this PC's, else its newest cloud revision) and the career is chosen; its first Play uploads the copy. A failed copy says why and
-    /// leaves the empty career with its Start choices.
-    /// </summary>
-    private async Task StartNoobCareerFromHardcoreAsync()
-    {
-        if (StartCard is not { } card || _session is null || card.Player.Mode == "hardcore") return;
-        var usable = UsableNoobSources();
-        if (usable is not [var plan, ..])
-        {
-            var reason = NoobStart.RefusalKey(CurrentGame, NoobFacts(), NoobCloudReachable);
-            Log($"profiles: start {CurrentGame.Id} {card.Player.ProfileId} from Hardcore refused ({reason})");
-            var facts = NoobFacts();
-            Message = S.Format("noob_hc.not_created", ("reason", NoobPlanText(NoobStart.Plan(CurrentGame, FirstFact(facts), NoobCloudReachable), FirstFact(facts), card.Player.Gamertag)));
-            return;
-        }
-        await Run(S.Format("busy.starting_career", ("mode", BusyMode(card.Player.Mode)), ("game", GameLabel)), async () =>
-        {
-            var (row, alreadyStarted) = await EnsureCareerAsync(card);
-            if (row is null) return;
-            if (alreadyStarted)
-            {
-                Log($"profiles: start {row.Game} {row.ProfileId} → exists and started, chosen");
-                _startRow = null;
-                ChangedCareerStart();
-                ChooseProfile(row);
-                Message = S.Format("careers.exists_chosen", ("game", GameLabel), ("name", ProfileName.Plain(row.Gamertag)));
-                return;
-            }
-            Log($"profiles: start {row.Game} {row.ProfileId} from Hardcore {plan.Hardcore!.ProfileId} ({plan.Source})");
-            if (!await StartNoobFromHardcoreAsync(row, plan.Hardcore)) return; // the reason is shown; the empty career keeps its Start choices
-            _startRow = null;
-            ChangedCareerStart();
-            SavesPop(SavesScreen.Start);
-            ChooseProfile(row);
-        });
-    }
-
+    /// <summary>The Start screen's "From my AZIMUTH profile": the §4.10 check of a Hardcore card (an Azimuth card starts fresh only, OD-239).</summary>
+    public Task StartCareerFromProfileAsync() => CareerStartHardcore ? StartCareerAsync(fromExisting: true) : Task.CompletedTask;
     private async Task StartCareerAsync(bool fromExisting)
     {
         if (StartCard is not { } card || _session is null) return;
-        if (fromExisting && !card.Offers.FromExisting) return;
-        if (fromExisting && card.Player.Mode != "hardcore" && !HasAzimuthSaves()) { Message = S["saves.none_found"]; return; } // review L1: nothing to start from, nothing created
+        if (fromExisting && (!card.Offers.FromExisting || card.Player.Mode != "hardcore")) return; // OD-239: an Azimuth career starts fresh only
         await Run(S.Format("busy.starting_career", ("mode", BusyMode(card.Player.Mode)), ("game", GameLabel)), async () =>
         {
             var (row, alreadyStarted) = await EnsureCareerAsync(card);
@@ -159,7 +114,6 @@ public sealed partial class ShellViewModel
                 Message = S.Format("careers.started", ("game", GameLabel), ("name", ProfileName.Plain(row.Gamertag)));
                 return;
             }
-            if (row.Mode == "hardcore")
             {
                 // §6.7: the source is the other profile's career of the same game, checked by the dry run on the empty career
                 var sources = SourcesFor(row.Xuid);
@@ -171,11 +125,7 @@ public sealed partial class ShellViewModel
                 // OD-216: picking "from my other profile" runs the check at once (its latest cloud revision); with several sources of the
                 // mode (pre-cleanup duplicates) the player picks one first
                 if (_seedChoiceSource is { } source) await CheckSeedAsync(row, source.Profile, fromPlay: false);
-                return;
             }
-            Log($"profiles: start {row.Game} {row.ProfileId} from a save on this PC");
-            ChooseProfile(row);
-            OfferSaves(row, always: true); // OD-41: the picker lists this PC's saves of the game (the other profile's included)
         });
     }
 
@@ -292,14 +242,6 @@ public sealed partial class ShellViewModel
         return set;
     }
 
-    /// <summary>This PC has an Azimuth save of the chosen game (a Noob career may start from it, OD-41).</summary>
-    private bool HasAzimuthSaves()
-    {
-        if (_install is null || !CurrentGame.FullFeatures) return false;
-        try { return SavesList(AzimuthSaves.SavesRoot(_install.Root, CurrentGame)).Count > 0; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
-    }
-
     /// <summary>A card's line: the mode, then where its career of the chosen game stands (CAREERS.md §6.4).</summary>
     private string CareerLine(BoardCard card, Profile row)
     {
@@ -315,6 +257,7 @@ public sealed partial class ShellViewModel
             {
                 CareerProgressKind.NoSyncYet => S["careers.no_sync"],
                 CareerProgressKind.NewCareer => S["careers.new"],
+                CareerProgressKind.AzimuthSave => S["careers.azimuth_save"],
                 _ => ProgressText(card.Career!.Progress!),
             },
         };
@@ -384,7 +327,7 @@ public sealed partial class ShellViewModel
         Changed(nameof(StartFromProfileLabel));
         Changed(nameof(StartFromProfileHint));
         Changed(nameof(ShowStartFromProfile));
-        Changed(nameof(StartFromPcEnabled));
+        Changed(nameof(ShowStartFromPc));
         Changed(nameof(StartFromPcHint));
         Changed(nameof(StartAccent));
         Changed(nameof(CareerStartTitle));
