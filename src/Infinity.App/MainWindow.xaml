@@ -1592,7 +1592,7 @@
                 <StackPanel MaxWidth="640" Visibility="{Binding ShowSavesDelete, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding DeleteProfileTitle}" Style="{StaticResource SmH1}" />
                   <TextBlock Text="{Binding DeleteProfileBody}" Style="{StaticResource SmSub}" Foreground="#FFFFC1C9" Margin="0,0,0,10" />
-                  <TextBlock Text="{Binding S[profiles.delete_keeps]}" Style="{StaticResource SmHint}" />
+                  <TextBlock Text="{Binding DeleteProfileKeeps}" Style="{StaticResource SmHint}" />
                   <TextBlock Text="{Binding DeleteProfileTypeHint}" Margin="0,18,0,6" TextWrapping="Wrap" FontWeight="SemiBold" />
                   <TextBox Text="{Binding DeleteProfileTyped, UpdateSourceTrigger=PropertyChanged}" MaxLength="20" FontSize="16" Padding="10,8"
                            AutomationProperties.Name="{Binding DeleteProfileTypeHint}" />
@@ -1799,7 +1799,7 @@
                 <StackPanel>
                   <TextBlock Text="{Binding DeleteProfileTitle}" FontWeight="Bold" FontSize="16" TextWrapping="Wrap" />
                   <TextBlock Text="{Binding DeleteProfileBody}" Margin="0,6,0,6" TextWrapping="Wrap" Foreground="{StaticResource InfinityRose}" />
-                  <TextBlock Text="{Binding S[profiles.delete_keeps]}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding DeleteProfileKeeps}" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
                   <TextBlock Text="{Binding DeleteProfileTypeHint}" Margin="0,12,0,4" TextWrapping="Wrap" />
                   <TextBox Text="{Binding DeleteProfileTyped, UpdateSourceTrigger=PropertyChanged}" MaxLength="20"
                            AutomationProperties.Name="{Binding DeleteProfileTypeHint}" />
