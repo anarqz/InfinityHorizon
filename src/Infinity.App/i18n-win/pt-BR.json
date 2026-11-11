@@ -1637,5 +1637,7 @@
   "oldsave.reason": "Antes de mover o save antigo do perfil {mode} {name} ({source}) para o save do Azimuth",
   "oldsave.not_azimuth": "{folder} não é um save antigo de um perfil AZIMUTH, então nada foi movido nem alterado.",
   "oldsave.none_for_row": "Este perfil AZIMUTH não tem save antigo para mover neste jogo.",
-  "sm.copy_source": "{mode} · {name} ({folder})"
+  "sm.copy_source": "{mode} · {name} ({folder})",
+  "profiles.delete_finishing": "Finalizando a sua última sessão, tente de novo em {seconds} s.",
+  "busy.delete_finishing": "Finalizando a sua última sessão: excluindo de novo em {seconds} s…"
 }

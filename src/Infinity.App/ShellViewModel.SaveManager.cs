@@ -1400,6 +1400,7 @@ public sealed partial class ShellViewModel
     private void ArchiveDeletedCareer(Infinity.Core.Process.GameDefinition game, Profile row, bool allGames, string? installRoot)
     {
         if (installRoot is null || !ulong.TryParse(row.Xuid, NumberStyles.None, CultureInfo.InvariantCulture, out var xuid)) return;
+        if (xuid == AzimuthSaves.OfflineXuid) return; // OD-239: a profile's deletion never touches Azimuth's own save
         var root = AzimuthSaves.SavesRoot(installRoot, game);
         var folder = CloudSaveFiles.ProfileDir(root, xuid);
         if (!Directory.Exists(folder)) return;
