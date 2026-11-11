@@ -122,7 +122,11 @@ public abstract record SupervisorEvent
     public sealed record NoticeSent(byte Level, string Text) : SupervisorEvent;
 
     public sealed record Exited(ExitDisposition Disposition) : SupervisorEvent;
-    public sealed record CrashCaptured(CrashIncident Incident) : SupervisorEvent;
+    public sealed record CrashCaptured(CrashIncident Incident) : SupervisorEvent
+    {
+        /// <summary>launcher.log: the incident id and exit code only, never its roster (gamertags, XUIDs) or versions.</summary>
+        public override string ToString() => $"CrashCaptured {{ Id = {Incident.Id}, ExitCode = 0x{Incident.ExitCode:x8} }}";
+    }
 
     public sealed record Relaunching(int Attempt) : SupervisorEvent;
 
@@ -481,8 +485,13 @@ public sealed class PlaySupervisor
                         var incident = new CrashIncident(Guid.CreateVersion7().ToString(), account, sessionId, _config.Game, _config.Xuid,
                             ended, _config.LauncherVersion, _config.Install.HookVersion, _config.Install.Version, code,
                             dump?.Info, dump?.Reason.ToString() ?? "snapshot_unavailable", crashContext.Freeze());
-                        reports.Save(incident, dump is null ? [] : dump.Bytes.AsSpan());
-                        _emit(new SupervisorEvent.CrashCaptured(incident));
+                        // OD-241: a dump the player already handled (Ignore or Get logs) is never rebuilt into a crash screen
+                        if (reports.Save(incident, dump is null ? [] : dump.Bytes.AsSpan()))
+                        {
+                            _emit(new SupervisorEvent.Note("crash: captured " + incident.Id + " (dump " + (dump?.Reason.ToString() ?? "snapshot_unavailable") + ")"));
+                            _emit(new SupervisorEvent.CrashCaptured(incident));
+                        }
+                        else _emit(new SupervisorEvent.Note("crash: " + CrashIncidentStore.HandledKey(incident) + " already handled, not shown again"));
                     }
                     catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
                     { _emit(new SupervisorEvent.Note("crash: diagnostic capture unavailable")); }

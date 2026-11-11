@@ -603,8 +603,6 @@ public partial class MainWindow : Window
 
     private void OnNavBugReport(object sender, RoutedEventArgs e) => _vm.OpenBugReport();
 
-    private void OnGitHubIssues(object sender, RoutedEventArgs e) => OpenCommunityLink("https://github.com/anarqz/InfinityHorizon/issues");
-
     private void OnDiscord(object sender, RoutedEventArgs e) => OpenCommunityLink("https://discord.gg/BqMVftFvXH");
 
     // OD-149: the anti-cheat isolation's dispute link (the community Discord)
@@ -805,23 +803,13 @@ public partial class MainWindow : Window
 
     private void OnRevertIni(object sender, RoutedEventArgs e) => _vm.RevertIni();
     private void OnReviewCrash(object sender, RoutedEventArgs e) => _vm.ReviewCrash();
-    private void OnLaterCrash(object sender, RoutedEventArgs e) => _vm.LaterCrash();
-    private void OnDiscardCrash(object sender, RoutedEventArgs e) => _vm.DiscardCrash();
-    private async void OnSendCrash(object sender, RoutedEventArgs e) => await _vm.SendCrashAsync();
-
-    private void OnCopyCrash(object sender, RoutedEventArgs e)
-    {
-        if (_vm.CopyableCrashReport() is not { } report) return;
-        try { Clipboard.SetText(report); _vm.CrashExportResult(true); }
-        catch (System.Runtime.InteropServices.ExternalException) { _vm.CrashExportResult(false); }
-    }
-
-    private void OnSaveCrashReport(object sender, RoutedEventArgs e) => _vm.SaveCrashReportWithPicker();
-
-    private void OnPrivateCrashSupport(object sender, RoutedEventArgs e)
-    {
-        if (_vm.CrashPrivateSupportUrl is { } url) OpenCommunityLink(url.AbsoluteUri);
-    }
+    // OD-241: the crash screen's two buttons
+    private void OnIgnoreCrash(object sender, RoutedEventArgs e) => _vm.IgnoreCrash();
+    private async void OnGetCrashLogs(object sender, RoutedEventArgs e) => await _vm.GetCrashLogsAsync();
+    // OD-241: "Found a bug?" → the same collector
+    private async void OnGetLauncherLogs(object sender, RoutedEventArgs e) => await _vm.GetLauncherLogsAsync();
+    // the integrity card's support link: Discord #help (the one SupportLinks entry, app first, then the browser)
+    private void OnHelpChannel(object sender, RoutedEventArgs e) => _vm.OpenHelpChannel();
 
     private async void OnCheckIntegrity(object sender, RoutedEventArgs e) => await _vm.CheckIntegrityAsync();
     private void OnCancelIntegrity(object sender, RoutedEventArgs e) => _vm.CancelIntegrityCheck();
@@ -831,8 +819,6 @@ public partial class MainWindow : Window
         try { Clipboard.SetText(_vm.CopyableIntegrityReport()); _vm.IntegrityCopyResult(true); }
         catch (System.Runtime.InteropServices.ExternalException) { _vm.IntegrityCopyResult(false); }
     }
-
-    private void OnSaveCrashDump(object sender, RoutedEventArgs e) => _vm.SaveCrashDumpWithPicker();
 
     // Only the catalog's https links are opened (the mods' official repositories).
     private void OnOpenLink(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)

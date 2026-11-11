@@ -13,21 +13,8 @@ public enum MinidumpReadFailure { None, TooLarge, UnsupportedFormat, Malformed, 
 public static class MinidumpInspector
 {
     public const int MaxDumpBytes = 16 * 1024 * 1024;
-    public const int MaxUploadDumpBytes = 4 * 1024 * 1024;
     public const int MaxStreams = 128;
     private const int MaxRecords = 4096;
-
-    /// <summary>Eligibility for the server's restricted attachment format; this does not promise memory redaction.</summary>
-    public static bool IsMinimizedUpload(ReadOnlySpan<byte> bytes)
-    {
-        if (bytes.Length > MaxUploadDumpBytes || !TryRead(bytes, out _, out _)) return false;
-        if ((U64(bytes, 24) & ~0x1080UL) != 0) return false;
-        var count = U32(bytes, 8);
-        var directory = (int)U32(bytes, 12);
-        for (var i = 0; i < count; i++)
-            if (U32(bytes, directory + (i * 12)) == 9) return false;
-        return true;
-    }
 
     public static bool TryRead(ReadOnlySpan<byte> bytes, out CrashDumpInfo? info, out MinidumpReadFailure failure)
     {

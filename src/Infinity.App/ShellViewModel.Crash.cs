@@ -1,65 +1,55 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Globalization;
 using System.IO;
-using System.Net.Http;
 using System.Text.Json;
-using Infinity.Core.Api;
-using Infinity.Core.Auth;
 using Infinity.Core.Diagnostics;
 
 namespace Infinity.App;
 
+/// <summary>
+/// OD-241: the crash screen has exactly two buttons. "Ignore" marks the crash handled (it never shows again, and the same .dmp is never
+/// rebuilt into one, <see cref="CrashIncidentStore.MarkHandled"/>); "Get logs" runs the shared collector (<see cref="CollectLogsAsync"/>)
+/// and then marks it handled. Nothing is sent to a server. Several crashes since the last time show as one screen (the newest, with the
+/// count of the earlier ones) and are handled together.
+/// </summary>
 public sealed partial class ShellViewModel
 {
     private CrashIncident? _crash;
-    private CrashSubmission? _crashSubmission;
-    private bool _crashOpen, _crashConsent, _crashManualDumpConsent, _crashSending, _crashNewMetadataAction, _crashSent;
+    private CrashIncident[] _crashEarlier = [];
+    private bool _crashOpen;
     private string? _crashStatus;
-    private CancellationTokenSource? _crashSendStop;
-    private ManualDumpExport? _crashDumpExport;
     private CrashIncidentStore CrashStore => new(_stateDirectory);
 
     public bool HasCrashReport => _crash is not null && InShell;
     public bool ShowCrashReport => HasCrashReport && _crashOpen && !_onMods && !_onSetup && !_onAccount && !_onBugReport;
-    public bool CrashConsent { get => _crashConsent; set { _crashConsent = value; Changed(string.Empty); } }
-    public bool CrashManualDumpConsent { get => _crashManualDumpConsent; set { _crashManualDumpConsent = value; Changed(string.Empty); } }
-    public bool CanConsentCrash => CrashIdle && !_crashSent;
-    public bool CanChooseManualCrashDump => CrashIdle && _crash?.Dump is not null;
-    public bool CanExportCrash => HasCrashReport && !_crashSending && _crashDumpExport is null;
-    public bool CanSaveCrashDump => CanExportCrash && _crash?.Dump is not null && _crashManualDumpConsent && !Playing;
-    public Uri? CrashPrivateSupportUrl { get; } = PrivateSupportLink.Parse(Environment.GetEnvironmentVariable("FI_PRIVATE_SUPPORT_URL") ?? "https://discord.gg/NzB447nZYt");
-    public bool CanOpenCrashSupport => CrashPrivateSupportUrl is not null;
-    public string CrashSupportNote => S[CanOpenCrashSupport ? "crash.private_support_help" : "crash.private_support_unset"];
-    public string CrashMigrationNote => _crashNewMetadataAction ? S["crash.legacy_action"] : string.Empty;
-    public bool CanSendCrash => _crashConsent && CanExportCrash && !_crashSent && !Playing;
-    public bool CrashIdle => !_crashSending && _crashDumpExport is null;
+    public bool CanHandleCrash => HasCrashReport && !_busy;
     public string CrashStatus => _crashStatus ?? string.Empty;
+    public bool HasCrashStatus => _crashStatus is { Length: > 0 };
     public string CrashCode => _crash is null ? string.Empty : $"0x{_crash.ExitCode:x8}";
     public string CrashLocation => _crash?.Dump is { FaultModule: { } module, FaultModuleRva: { } rva }
         ? $"{module} + 0x{rva:x}" : S["crash.location_unknown"];
+    public string CrashWhen => _crash is null ? string.Empty : _crash.OccurredAt.ToLocalTime().ToString("g", CultureInfo.GetCultureInfo(S.Locale));
     public string CrashParticipants => _crash?.Context.World is { } world
         ? string.Join("\n", world.Participants.Select(p => $"{p.Gamertag} · {p.Xuid}")) : S["crash.no_world"];
     public string CrashContextNote => _crash?.Context.World is { } world
         ? S.Format("crash.roster_note", ("time", world.ObservedAt.ToLocalTime().ToString("g", CultureInfo.GetCultureInfo(S.Locale))))
         : S["crash.roster_missing"];
-    public string CrashDumpNote => _crash?.Dump is null ? S["crash.no_dump"] : S["crash.dump_privacy"];
+    public bool HasCrashEarlier => _crashEarlier.Length > 0;
+    public string CrashEarlierNote => _crashEarlier.Length == 0 ? string.Empty
+        : S.Format(_crashEarlier.Length == 1 ? "crash.earlier_one" : "crash.earlier_many", ("count", _crashEarlier.Length.ToString(CultureInfo.CurrentCulture)));
 
+    /// <summary>The game just crashed (the supervisor stored the incident): the screen with every crash not handled yet.</summary>
     private void PresentCrash(CrashIncident incident)
     {
-        if (_session?.Me?.AccountId != incident.OwnerAccountId) return;
-        ClearCrashScreen();
-        _crash = incident; _crashOpen = true; _crashConsent = _crashManualDumpConsent = _crashNewMetadataAction = _crashSent = false; _crashStatus = null;
-        _onMods = _onSetup = _onAccount = _onBugReport = _onNews = false;
-        try { _crashSubmission = CrashStore.Prepared(incident.Id); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { _crashSubmission = null; }
-        if (_crashSubmission is not null && !_crashSubmission.IsCurrentMetadata)
-        { _crashSubmission = null; _crashNewMetadataAction = true; }
-        try { _crashSent = _crashSubmission is not null && CrashStore.SentReportId(incident.Id) == _crashSubmission.Request.ReportId; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _crashSent = false; }
-        if (_crashSent) _crashStatus = S["crash.sent"];
-        Changed(string.Empty);
+        if (_session?.Me?.AccountId is not { } account || account != incident.OwnerAccountId) return;
+        IReadOnlyList<CrashIncident> pending;
+        try { pending = CrashStore.Pending(account); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { Log("crash: local reports unreadable (" + e.GetType().Name + ")"); pending = []; }
+        if (!pending.Any(i => i.Id == incident.Id)) pending = [incident, .. pending];
+        ShowCrashes(pending);
     }
 
+    /// <summary>Sign-in: a crash the player has not handled yet (Ignore or Get logs) shows once more; a handled one never does.</summary>
     private void LoadPendingCrash()
     {
         ClearCrashScreen();
@@ -67,105 +57,64 @@ public sealed partial class ShellViewModel
         try
         {
             var pending = CrashStore.Pending(account);
-            if (pending.Count != 0)
-            {
-                bool NeedsSending(CrashIncident item)
-                {
-                    try { return CrashStore.SentReportId(item.Id) is null; }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return true; }
-                }
-                PresentCrash(pending.FirstOrDefault(NeedsSending) ?? pending[0]);
-                if (_crashSent) _crashOpen = false;
-            }
+            Log($"crash: {pending.Count} unhandled local report(s)");
+            ShowCrashes(pending);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { Log("crash: pending diagnostics unavailable"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { Log("crash: local reports unreadable (" + e.GetType().Name + ")"); }
+    }
+
+    private void ShowCrashes(IReadOnlyList<CrashIncident> pending)
+    {
+        ClearCrashScreen();
+        if (pending.Count == 0) { Changed(string.Empty); return; }
+        _crash = pending[0];
+        _crashEarlier = pending.Skip(1).ToArray();
+        _crashOpen = true;
+        _onMods = _onSetup = _onAccount = _onBugReport = _onNews = false;
+        Log($"crash: showing {CrashIncidentStore.HandledKey(_crash)} code 0x{_crash.ExitCode:x8} (+{_crashEarlier.Length} earlier)");
+        Changed(string.Empty);
     }
 
     private void ClearCrashScreen()
     {
-        _crashSendStop?.Cancel();
-        _crashDumpExport?.Stop.Cancel(); _crashDumpExport = null;
-        _crash = null; _crashSubmission = null; _crashConsent = _crashManualDumpConsent = _crashOpen = _crashNewMetadataAction = _crashSent = false;
-        _crashStatus = null;
+        _crash = null; _crashEarlier = []; _crashOpen = false; _crashStatus = null;
     }
 
     public void ReviewCrash() { if (HasCrashReport) { _onMods = _onSetup = _onAccount = _onBugReport = _onNews = false; _crashOpen = true; Changed(string.Empty); } }
-    public void LaterCrash() { if (!CrashIdle) return; _crashOpen = _crashConsent = _crashManualDumpConsent = false; Changed(string.Empty); }
 
-    public string? CopyableCrashReport() => CanExportCrash && _crash is { } incident
-        ? CrashSupportReport.Create(incident, _crashSubmission?.Request.ReportId) : null;
-
-    public void CrashExportResult(bool success) { _crashStatus = S[success ? "crash.exported" : "crash.export_failed"]; Changed(string.Empty); }
-
-    internal sealed class ManualDumpExport(CrashIncident incident, AccountSession session) : IDisposable
+    /// <summary>"Ignore": the crash (and the earlier ones on the screen) never shows again.</summary>
+    public void IgnoreCrash()
     {
-        internal CrashIncident Incident { get; } = incident;
-        internal AccountSession Session { get; } = session;
-        internal CancellationTokenSource Stop { get; } = new();
-        public void Dispose() => Stop.Dispose();
-    }
-
-    internal ManualDumpExport? BeginManualCrashDumpExport()
-    {
-        if (!CanSaveCrashDump || _crash is not { } incident || _session is not { } session || session.Me?.AccountId != incident.OwnerAccountId) return null;
-        var operation = new ManualDumpExport(incident, session);
-        _crashDumpExport = operation; Changed(string.Empty);
-        return operation;
-    }
-
-    internal bool IsCurrentCrashExport(ManualDumpExport operation) => ReferenceEquals(_crashDumpExport, operation)
-        && ReferenceEquals(_session, operation.Session) && _crash?.Id == operation.Incident.Id && !operation.Stop.IsCancellationRequested;
-
-    internal async Task<byte[]?> ReadCrashDumpForManualExportAsync(ManualDumpExport operation)
-    {
-        if (!IsCurrentCrashExport(operation)) return null;
-        var bytes = await Task.Run(() => CrashStore.ReadDump(operation.Incident), operation.Stop.Token);
-        return IsCurrentCrashExport(operation) ? bytes : null;
-    }
-
-    internal void FinishManualCrashDumpExport(ManualDumpExport operation, bool? success)
-    {
-        var current = IsCurrentCrashExport(operation);
-        if (ReferenceEquals(_crashDumpExport, operation)) _crashDumpExport = null;
-        if (current)
-        {
-            _crashManualDumpConsent = false;
-            if (success is { } completed) CrashExportResult(completed);
-        }
-        Changed(string.Empty);
-        operation.Dispose();
-    }
-    public void DiscardCrash()
-    {
-        if (!CrashIdle || _crash is null) return;
-        try { CrashStore.Delete(_crash.Id); LoadPendingCrash(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _crashStatus = S["crash.local_failed"]; }
+        if (!CanHandleCrash) return;
+        if (MarkCrashesHandled("ignored")) LoadPendingCrash();
         Changed(string.Empty);
     }
 
-    public async Task SendCrashAsync()
+    /// <summary>"Get logs": the shared collector, then the crash is handled (a failed collection keeps the screen, with why).</summary>
+    public async Task GetCrashLogsAsync()
     {
-        if (!CanSendCrash || _crash is not { } incident || _session is not { } session || session.Me?.AccountId != incident.OwnerAccountId) return;
-        _crashSending = true; _crashStatus = S["crash.sending"]; Changed(string.Empty);
-        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        _crashSendStop = bound;
+        if (!CanHandleCrash) return;
+        if (!await CollectLogsAsync(LogBundleKind.Crash)) { _crashStatus = Message; Changed(string.Empty); return; }
+        if (MarkCrashesHandled("logs collected")) LoadPendingCrash();
+        Changed(string.Empty);
+    }
+
+    private bool MarkCrashesHandled(string how)
+    {
+        if (_crash is not { } shown) return false;
+        var all = new[] { shown }.Concat(_crashEarlier).ToArray();
         try
         {
-            if (_crashSubmission is null)
-            {
-                var draft = CrashSubmission.Prepare(incident, _crashConsent, _crashNewMetadataAction ? Guid.CreateVersion7().ToString() : null);
-                CrashStore.Prepare(draft, incident.Id);
-                _crashSubmission = draft;
-            }
-            await _crashSubmission.SendAsync(session.Api, session.Tokens, bound.Token);
-            if (!ReferenceEquals(_session, session) || _crash?.Id != incident.Id) return;
-            CrashStore.MarkSent(incident.Id, _crashSubmission.Request.ReportId);
-            _crashSent = true; _crashConsent = false; _crashStatus = Message = S["crash.sent"];
+            foreach (var incident in all) CrashStore.MarkHandled(incident);
         }
-        catch (ApiException e)
-        { if (ReferenceEquals(_session, session) && _crash?.Id == incident.Id) _crashStatus = e.Code is ErrorCodes.AccountsFrozen or ErrorCodes.CrashDumpsDisabled ? S[e.Code == ErrorCodes.AccountsFrozen ? "crash.frozen" : "crash.dumps_disabled"] : S["crash.send_failed"] + " " + ErrorText(e.Code); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException)
-        { if (ReferenceEquals(_session, session) && _crash?.Id == incident.Id) _crashStatus = S["crash.send_failed"]; }
-        finally { if (ReferenceEquals(_crashSendStop, bound)) _crashSendStop = null; _crashSending = false; Changed(string.Empty); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // never a silent dismissal: the screen stays and says it would come back
+            Log("crash: handled list not saved (" + e.GetType().Name + ")");
+            _crashStatus = S["crash.handled_failed"];
+            return false;
+        }
+        foreach (var incident in all) Log("crash: " + how + " " + CrashIncidentStore.HandledKey(incident));
+        return true;
     }
 }

@@ -30,7 +30,7 @@ public sealed partial class ShellViewModel
     public string PlayButtonLabel => S[PlaysOnline ? "offline.play_online_button" : "offline.play_offline_button"];
 
     /// <summary>The offline Play's own requirements: no account, session or online service involved.</summary>
-    public bool CanPlayOffline => Ready && !PlaysOnline && _install is not null && OfflinePlayProfile is not null && !Playing && !_busy && CrashIdle
+    public bool CanPlayOffline => Ready && !PlaysOnline && _install is not null && OfflinePlayProfile is not null && !Playing && !_busy
         && GameConfigurationReady && !ModPlayBlocked && !JobsBlockPlay && OperatingSystem.IsWindows();
 
     /// <summary>The local profile an offline Play plays: the chosen local one, or the cached copy of the chosen account profile.</summary>

@@ -1,31 +1,67 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Infinity.Core.Diagnostics;
 
-/// <summary>Local-only model. Network DTOs are defined separately by the platform contract.</summary>
+/// <summary>Local-only model of one abnormal game exit (never sent anywhere; OD-241).</summary>
 public sealed record CrashIncident(string Id, string OwnerAccountId, string SessionId, string Game, string Xuid,
     DateTimeOffset OccurredAt, string LauncherVersion, string? HookVersion, string? AzimuthVersion, uint ExitCode,
     CrashDumpInfo? Dump, string DumpAbsentReason, CrashContextSnapshot Context);
 
-/// <summary>No upload on capture or load. Files are private local diagnostics until an explicit Send action.</summary>
+/// <summary>
+/// The launcher's local crash reports (<c>&lt;state&gt;\crash-reports\&lt;id&gt;</c>) and the list of crashes the player already handled
+/// (<c>&lt;state&gt;\crash-handled.txt</c>, OD-241 "Ignore" or "Get logs"). A handled crash never shows again, and a later capture of the
+/// same minidump is never stored again (<see cref="HandledKey(CrashDumpInfo)"/> is derived from the dump itself).
+/// </summary>
 public sealed class CrashIncidentStore(string stateDirectory)
 {
     public const int MaxMetadataBytes = 64 * 1024;
     public const int MaxIncidents = 8;
+    public const int MaxHandledKeys = 256;
+    public const string HandledFileName = "crash-handled.txt";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly string _root = Path.Combine(Path.GetFullPath(stateDirectory), "crash-reports");
+    private readonly string _state = Path.GetFullPath(stateDirectory);
+    private string Root => Path.Combine(_state, "crash-reports");
+    private string HandledPath => Path.Combine(_state, HandledFileName);
 
-    private string Folder(string id) => Guid.TryParseExact(id, "D", out _) ? Path.Combine(_root, id) : throw new InvalidDataException("Invalid incident id");
+    private string Folder(string id) => Guid.TryParseExact(id, "D", out _) ? Path.Combine(Root, id) : throw new InvalidDataException("Invalid incident id");
 
-    public void Save(CrashIncident incident, ReadOnlySpan<byte> dump)
+    /// <summary>
+    /// The stable id of a crash: its minidump's own identity when one was matched (process id, dump time, exception, fault module and
+    /// offset; the same .dmp always gives the same key), else the local incident id.
+    /// </summary>
+    public static string HandledKey(CrashIncident incident)
+    {
+        ArgumentNullException.ThrowIfNull(incident);
+        return incident.Dump is { } dump ? HandledKey(dump) : "inc-" + incident.Id;
+    }
+
+    public static string HandledKey(CrashDumpInfo dump)
+    {
+        ArgumentNullException.ThrowIfNull(dump);
+        var identity = string.Join('|', dump.ProcessId.ToString(CultureInfo.InvariantCulture),
+            dump.TimestampUtc.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+            dump.ExceptionCode?.ToString("x8", CultureInfo.InvariantCulture) ?? "-", dump.FaultModule?.ToLowerInvariant() ?? "-",
+            dump.FaultModuleRva?.ToString("x", CultureInfo.InvariantCulture) ?? "-");
+        return "dmp-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..32];
+    }
+
+    /// <summary>
+    /// Stores a new incident; false (nothing written) when its dump was already handled: a crash the player ignored is never rebuilt from
+    /// the same .dmp.
+    /// </summary>
+    public bool Save(CrashIncident incident, ReadOnlySpan<byte> dump)
     {
         ArgumentNullException.ThrowIfNull(incident);
         if (dump.Length > CrashDumpCollector.MaxDumpBytes) throw new InvalidDataException("Dump size limit");
+        if (IsHandled(HandledKey(incident))) return false;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(incident, Json);
         if (bytes.Length > MaxMetadataBytes) throw new InvalidDataException("Metadata size limit");
-        Directory.CreateDirectory(_root);
-        CheckDirectory(_root);
+        Directory.CreateDirectory(Root);
+        CheckDirectory(Root);
         var folder = Folder(incident.Id);
         Directory.CreateDirectory(folder);
         CheckDirectory(folder);
@@ -39,15 +75,24 @@ public sealed class CrashIncidentStore(string stateDirectory)
         }
         catch { if (createdMetadata) Delete(incident.Id); throw; }
         Prune();
+        return true;
     }
 
+    /// <summary>The account's crashes not handled yet, newest first: what the crash screen shows.</summary>
     public IReadOnlyList<CrashIncident> Pending(string accountId)
     {
-        if (!Directory.Exists(_root)) return [];
-        CheckDirectory(_root);
+        var handled = Handled();
+        return All().Where(i => i.OwnerAccountId == accountId && !handled.Contains(HandledKey(i))).ToArray();
+    }
+
+    /// <summary>Every valid local incident on this PC, newest first (handled ones included): what "Get logs" projects into the zip.</summary>
+    public IReadOnlyList<CrashIncident> All()
+    {
+        if (!Directory.Exists(Root)) return [];
+        CheckDirectory(Root);
         Prune();
         var result = new List<CrashIncident>();
-        foreach (var folder in Directory.EnumerateDirectories(_root).Take(64))
+        foreach (var folder in Directory.EnumerateDirectories(Root).Take(64))
         {
             try
             {
@@ -56,21 +101,22 @@ public sealed class CrashIncidentStore(string stateDirectory)
                 var info = new FileInfo(path);
                 if (!info.Exists || info.Length > MaxMetadataBytes || (info.Attributes & FileAttributes.ReparsePoint) != 0) continue;
                 var incident = JsonSerializer.Deserialize<CrashIncident>(File.ReadAllBytes(path), Json);
-                if (incident is null || incident.OwnerAccountId != accountId || Folder(incident.Id) != folder
+                if (incident is null || incident.OwnerAccountId is null || Folder(incident.Id) != folder
                     || incident.Context is null || incident.Context.Observations is null
                     || incident.Context.Observations.Count > CrashContext.MaxObservations
                     || incident.Context.World is { } world && (world.Participants is null || world.Participants.Count > 12
                         || world.Participants.Any(p => p is null || p.Gamertag is null || p.Xuid is null || p.Role is null))) continue;
                 result.Add(incident);
             }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { /* An incomplete local incident is not submitted. */ }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { /* An incomplete local incident is skipped. */ }
         }
         return result.OrderByDescending(i => i.OccurredAt).Take(MaxIncidents).ToArray();
     }
 
+    /// <summary>The incident's stored dump, only when it is still the exact minidump the incident describes.</summary>
     public byte[]? ReadDump(CrashIncident incident)
     {
-        var folder = Folder(incident.Id); CheckDirectory(_root); CheckDirectory(folder);
+        var folder = Folder(incident.Id); CheckDirectory(Root); CheckDirectory(folder);
         var path = Path.Combine(folder, "crash.dmp"); var info = new FileInfo(path);
         if (!info.Exists || info.Length > CrashDumpCollector.MaxDumpBytes || (info.Attributes & FileAttributes.ReparsePoint) != 0) return null;
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -79,75 +125,47 @@ public sealed class CrashIncidentStore(string stateDirectory)
         return MinidumpInspector.TryRead(data, out var parsed, out _) && parsed == incident.Dump ? data : null;
     }
 
-    public CrashSubmission? Prepared(string id)
+    public bool IsHandled(string key) => Handled().Contains(key);
+
+    /// <summary>OD-241: the crash never shows again (persisted before the screen closes; the newest <see cref="MaxHandledKeys"/> are kept).</summary>
+    public void MarkHandled(CrashIncident incident)
     {
-        var folder = Folder(id); CheckDirectory(_root); CheckDirectory(folder);
-        var current = Path.Combine(folder, "metadata-submission.json");
-        var path = File.Exists(current) ? current : Path.Combine(folder, "submission.json"); var info = new FileInfo(path);
-        if (!info.Exists) return null;
-        if (info.Length > MaxMetadataBytes || (info.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Invalid local submission");
-        var draft = JsonSerializer.Deserialize<CrashSubmission>(File.ReadAllBytes(path), Json);
-        if (!Guid.TryParseExact(draft?.Request?.ReportId, "D", out var reportId) || reportId == Guid.Empty)
-            throw new InvalidDataException("Invalid local submission");
-        return draft;
+        var key = HandledKey(incident);
+        var keys = Handled().ToList();
+        if (keys.Contains(key)) return;
+        keys.Add(key);
+        Directory.CreateDirectory(_state);
+        var temporary = HandledPath + ".tmp";
+        File.WriteAllText(temporary, string.Join('\n', keys.TakeLast(MaxHandledKeys)) + "\n", new UTF8Encoding(false));
+        File.Move(temporary, HandledPath, overwrite: true);
     }
 
-    public void Prepare(CrashSubmission submission, string? incidentId = null)
+    private HashSet<string> Handled()
     {
-        ArgumentNullException.ThrowIfNull(submission);
-        if (!submission.IsCurrentMetadata) throw new InvalidDataException("Metadata-only consent is required");
-        var folder = Folder(incidentId ?? submission.Request.ReportId); CheckDirectory(_root); CheckDirectory(folder);
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(submission, Json);
-        if (bytes.Length > MaxMetadataBytes) throw new InvalidDataException("Submission size limit");
-        WriteNew(Path.Combine(folder, "metadata-submission.json"), bytes);
+        var info = new FileInfo(HandledPath);
+        if (!info.Exists) return [];
+        if (info.Length > 64 * 1024 || (info.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Invalid handled crash list");
+        return File.ReadAllLines(HandledPath).Select(l => l.Trim()).Where(ValidKey).ToHashSet(StringComparer.Ordinal);
     }
 
-    public string? SentReportId(string id)
-    {
-        var folder = Folder(id); CheckDirectory(_root); CheckDirectory(folder);
-        var path = Path.Combine(folder, "accepted-report.txt"); var info = new FileInfo(path);
-        if (!info.Exists) return null;
-        if (info.Length != 36 || (info.Attributes & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Invalid local receipt");
-        var reportId = File.ReadAllText(path);
-        return Guid.TryParseExact(reportId, "D", out var parsed) && parsed != Guid.Empty ? reportId : throw new InvalidDataException("Invalid local receipt");
-    }
+    private static bool ValidKey(string key) => key.Length is > 4 and <= 64 && (key.StartsWith("dmp-", StringComparison.Ordinal) || key.StartsWith("inc-", StringComparison.Ordinal))
+        && key.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 
-    public void MarkSent(string incidentId, string reportId)
-    {
-        if (!Guid.TryParseExact(reportId, "D", out var parsed) || parsed == Guid.Empty) throw new InvalidDataException("Invalid report id");
-        var folder = Folder(incidentId); CheckDirectory(_root); CheckDirectory(folder);
-        if (SentReportId(incidentId) == reportId) return;
-        WriteNew(Path.Combine(folder, "accepted-report.txt"), System.Text.Encoding.ASCII.GetBytes(reportId));
-    }
-
+    /// <summary>Removes the incident's folder: every plain file in it (older launchers' files too), then the folder once empty.</summary>
     public void Delete(string id)
     {
         var folder = Folder(id);
         if (!Directory.Exists(folder)) return;
-        CheckDirectory(_root); CheckDirectory(folder);
-        foreach (var name in new[] { "metadata.json", "crash.dmp", "submission.json", "metadata-submission.json", "accepted-report.txt" })
-        {
-            var path = Path.Combine(folder, name);
-            if (File.Exists(path)) File.Delete(path);
-        }
+        CheckDirectory(Root); CheckDirectory(folder);
+        foreach (var file in new DirectoryInfo(folder).EnumerateFiles().Take(64))
+            if ((file.Attributes & FileAttributes.ReparsePoint) == 0) file.Delete();
         if (!Directory.EnumerateFileSystemEntries(folder).Any()) Directory.Delete(folder);
     }
 
     private void Prune()
     {
-        foreach (var item in Directory.EnumerateDirectories(_root).Take(64).Select(p => new DirectoryInfo(p)).OrderByDescending(d => d.CreationTimeUtc).Select((d, i) => (d, i)).ToArray())
+        foreach (var item in Directory.EnumerateDirectories(Root).Take(64).Select(p => new DirectoryInfo(p)).OrderByDescending(d => d.CreationTimeUtc).Select((d, i) => (d, i)).ToArray())
             if (Guid.TryParseExact(item.d.Name, "D", out _) && (item.i >= MaxIncidents || item.d.CreationTimeUtc < DateTime.UtcNow.AddDays(-7))) Delete(item.d.Name);
-    }
-
-    private static void WriteNew(string path, byte[] bytes)
-    {
-        var created = false;
-        try
-        {
-            using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            created = true; file.Write(bytes); file.Flush(true);
-        }
-        catch { if (created) File.Delete(path); throw; }
     }
 
     private static void CheckDirectory(string path)

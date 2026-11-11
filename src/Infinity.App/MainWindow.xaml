@@ -1941,64 +1941,50 @@
           </Grid>
           </Border>
 
-          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowCrashReport, Converter={StaticResource Visible}}">
+          <!-- ============ CRASH (OD-241): exactly two buttons, Ignore and Get logs; nothing is sent to a server. -->
+          <ScrollViewer x:Name="CrashPage" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowCrashReport, Converter={StaticResource Visible}}">
             <StackPanel MaxWidth="700" HorizontalAlignment="Left">
               <TextBlock Text="{Binding S[crash.title]}" Style="{StaticResource PageTitle}" />
-              <TextBlock Text="{Binding S[crash.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,20" />
-              <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,20" />
+              <TextBlock Text="{Binding S[crash.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,20" TextWrapping="Wrap" />
               <Border Style="{StaticResource Card}">
                 <StackPanel>
-                  <TextBlock Text="{Binding CrashCode}" FontWeight="Bold" FontSize="20" />
-                  <TextBlock Text="{Binding CrashLocation}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,16" />
-                  <TextBlock Text="{Binding S[crash.participants]}" FontWeight="Bold" />
+                  <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding CrashWhen}" Foreground="{StaticResource InfinityMuted}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                    <TextBlock Text="{Binding CrashCode}" FontWeight="Bold" FontSize="20" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding CrashLocation}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0" />
+                  <TextBlock Text="{Binding CrashEarlierNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,8,0,0"
+                             Visibility="{Binding HasCrashEarlier, Converter={StaticResource Visible}}" />
+                  <TextBlock Text="{Binding S[crash.participants]}" FontWeight="Bold" Margin="0,16,0,0" />
                   <TextBlock Text="{Binding CrashParticipants}" TextWrapping="Wrap" Margin="0,6,0,8" />
                   <TextBlock Text="{Binding CrashContextNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding S[crash.blame_unknown]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,0,0,16" />
-                  <TextBlock Text="{Binding S[crash.metadata_privacy]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
-                  <TextBlock Text="{Binding CrashMigrationNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,8,0,0" />
-                  <CheckBox IsChecked="{Binding CrashConsent}" IsEnabled="{Binding CanConsentCrash}" Margin="0,12,0,8">
-                    <TextBlock Text="{Binding S[crash.metadata_consent]}" TextWrapping="Wrap" MaxWidth="520" />
-                  </CheckBox>
-                  <TextBlock Text="{Binding S[crash.dumps_disabled]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="12" Margin="0,0,0,12" />
-                  <TextBlock Text="{Binding CrashStatus}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" AutomationProperties.LiveSetting="Polite" />
-                  <WrapPanel Margin="0,16,0,0">
-                    <Button Content="{Binding S[crash.send]}" Click="OnSendCrash" IsEnabled="{Binding CanSendCrash}" Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[crash.copy]}" Click="OnCopyCrash" IsEnabled="{Binding CanExportCrash}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[crash.save_report]}" Click="OnSaveCrashReport" IsEnabled="{Binding CanExportCrash}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[crash.later]}" Click="OnLaterCrash" IsEnabled="{Binding CrashIdle}" Margin="0,0,8,8" />
-                    <Button Content="{Binding S[crash.discard]}" Click="OnDiscardCrash" IsEnabled="{Binding CrashIdle}" Margin="0,0,0,8" />
+                  <TextBlock Text="{Binding S[crash.logs_help]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" />
+                  <TextBlock Text="{Binding CrashStatus}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,12,0,0" AutomationProperties.LiveSetting="Polite"
+                             Visibility="{Binding HasCrashStatus, Converter={StaticResource Visible}}" />
+                  <WrapPanel Margin="0,20,0,0">
+                    <Button Content="{Binding S[crash.get_logs]}" Click="OnGetCrashLogs" IsEnabled="{Binding CanHandleCrash}" Style="{StaticResource AccentButtonStyle}" Margin="0,0,8,0" />
+                    <Button Content="{Binding S[crash.ignore]}" Click="OnIgnoreCrash" IsEnabled="{Binding CanHandleCrash}" />
                   </WrapPanel>
-                  <TextBlock Text="{Binding S[crash.manual_support]}" TextWrapping="Wrap" FontWeight="Bold" Margin="0,16,0,6" />
-                  <TextBlock Text="{Binding CrashSupportNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,8" />
-                  <Button Content="{Binding S[crash.private_support]}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" HorizontalAlignment="Left" Margin="0,0,0,12" />
-                  <TextBlock Text="{Binding CrashDumpNote}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" FontSize="12" Margin="0,0,0,8" />
-                  <CheckBox IsChecked="{Binding CrashManualDumpConsent}" IsEnabled="{Binding CanChooseManualCrashDump}" Margin="0,0,0,8">
-                    <TextBlock Text="{Binding S[crash.manual_dump_consent]}" TextWrapping="Wrap" MaxWidth="520" />
-                  </CheckBox>
-                  <Button Content="{Binding S[crash.save_dump]}" Click="OnSaveCrashDump" IsEnabled="{Binding CanSaveCrashDump}" HorizontalAlignment="Left" />
                 </StackPanel>
               </Border>
             </StackPanel>
           </ScrollViewer>
 
-          <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowBugReport, Converter={StaticResource Visible}}">
+          <!-- ============ FOUND A BUG? (OD-241): one "Get launcher logs" button, the crash screen's collector. -->
+          <ScrollViewer x:Name="BugPage" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowBugReport, Converter={StaticResource Visible}}">
             <StackPanel MaxWidth="740" HorizontalAlignment="Left">
               <TextBlock Text="{Binding S[bugs.eyebrow]}" Style="{StaticResource SectionTag}" />
               <TextBlock Text="{Binding S[bugs.title]}" Style="{StaticResource PageTitle}" Margin="0,8,0,0" />
-              <TextBlock Text="{Binding S[bugs.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,24" />
-              <TextBlock Text="{Binding S[community.contribution]}" TextWrapping="Wrap" Margin="0,0,0,18" Foreground="{StaticResource InfinityMuted}" />
+              <TextBlock Text="{Binding S[bugs.intro]}" Style="{StaticResource PageSubtitle}" Margin="0,8,0,24" TextWrapping="Wrap" />
               <Border Style="{StaticResource Card}">
                 <StackPanel>
-                  <TextBlock Text="{Binding S[bugs.step1]}" FontWeight="Bold" FontSize="16" />
-                  <TextBlock Text="{Binding S[bugs.step1_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
-                  <TextBlock Text="{Binding S[bugs.step2]}" FontWeight="Bold" FontSize="16" />
-                  <TextBlock Text="{Binding S[bugs.step2_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
-                  <TextBlock Text="{Binding S[bugs.step3]}" FontWeight="Bold" FontSize="16" />
-                  <TextBlock Text="{Binding S[bugs.step3_body]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,20" />
+                  <TextBlock Text="{Binding S[bugs.how]}" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,0,0,12" />
                   <TextBlock Text="{Binding VersionLabel}" FontSize="12" Foreground="{StaticResource InfinityGold}" />
-                  <Button Click="OnGitHubIssues" Style="{StaticResource AccentButtonStyle}"
-                          HorizontalAlignment="Left" Margin="0,18,0,0" AutomationProperties.Name="{Binding S[bugs.open]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[bugs.open]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
-                  <TextBlock Text="github.com/anarqz/InfinityHorizon" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,10,0,0" />
+                  <Button Content="{Binding S[bugs.get_logs]}" Click="OnGetLauncherLogs" IsEnabled="{Binding CanGetLauncherLogs}" Style="{StaticResource AccentButtonStyle}"
+                          HorizontalAlignment="Left" Margin="0,18,0,0" />
+                  <TextBlock Text="{Binding LogsStatus}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" Margin="0,12,0,0" AutomationProperties.LiveSetting="Polite"
+                             Visibility="{Binding HasLogsStatus, Converter={StaticResource Visible}}" />
                 </StackPanel>
               </Border>
             </StackPanel>
@@ -2095,7 +2081,7 @@
                   <StackPanel Visibility="{Binding ShowIntegritySupport, Converter={StaticResource Visible}}">
                     <WrapPanel Margin="-6,8,0,8">
                       <Button Content="{Binding S[integrity.copy]}" Style="{StaticResource LinkButton}" Click="OnCopyIntegrity" />
-                      <Button Content="{Binding S[crash.private_support]}" Style="{StaticResource LinkButton}" Click="OnPrivateCrashSupport" IsEnabled="{Binding CanOpenCrashSupport}" />
+                      <Button Content="{Binding S[help.open_channel]}" Style="{StaticResource LinkButton}" Click="OnHelpChannel" />
                     </WrapPanel>
                     <TextBlock Text="{Binding S[integrity.help]}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
                   </StackPanel>
