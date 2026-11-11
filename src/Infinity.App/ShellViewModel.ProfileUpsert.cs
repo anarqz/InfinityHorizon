@@ -127,7 +127,7 @@ public sealed partial class ShellViewModel
         row.Result = code switch
         {
             ErrorCodes.AccountsNameUnavailable => S["upsert.name_taken"],
-            ErrorCodes.AccountsProfileLimit when !row.Profile.Hardcore => S["profiles.azimuth_identity_exists"],
+            _ when AzimuthIdentity.RefusalKey(code, row.Profile.Hardcore) is { } identity => S[identity],
             ErrorCodes.AccountsProfileLimit => S["upsert.limit_kept"],
             _ => ProfileErrorText(code),
         };

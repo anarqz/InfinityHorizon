@@ -67,7 +67,7 @@ public sealed partial class ShellViewModel
         if (hardcore && NewSeedFromProfile && seedSource is null) { Message = S["seed.pick_source"]; return; }
 
         // OD-240: one Azimuth identity per account: signed in with one, no second Azimuth profile is made (here or on the server)
-        if (!hardcore && SignedIn && _session?.Me is { } me && AzimuthIdentity.Exists(me, game)) { Message = S["profiles.azimuth_identity_exists"]; return; }
+        if (!hardcore && SignedIn && _session?.Me is { } me && AzimuthIdentity.Exists(me, game)) { Message = S[AzimuthIdentity.ExistsKey]; return; }
         LocalProfile created;
         try { created = LocalProfiles.Create(game, NewName, hardcore ? "hardcore" : "noob", SaveFolderExists, DateTimeOffset.UtcNow, SignedIn ? _session?.Me?.AccountId : null); }
         catch (LocalProfileException refused) { Message = ProfileErrorText(refused.Code); return; }
@@ -89,7 +89,7 @@ public sealed partial class ShellViewModel
                 if (!hardcore && result is null or { Uploaded: false, ErrorCode: ErrorCodes.AccountsProfileLimit })
                 {
                     await ProfileUpsert.PlanAsync(api, access, LocalProfiles, game, SaveFolderExists, CancellationToken.None);
-                    Message = S["profiles.azimuth_identity_exists"];
+                    Message = S[AzimuthIdentity.ExistsKey];
                     return;
                 }
                 Message = result is { Uploaded: false, ErrorCode: { } code } ? ProfileErrorText(code)
