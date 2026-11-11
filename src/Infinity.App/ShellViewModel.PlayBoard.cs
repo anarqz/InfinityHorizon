@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Alexandre Moraes and contributors. GPL-3.0-only; see LICENSE and NOTICE.
 using System.Collections.ObjectModel;
 using System.Windows.Media;
+using System.IO;
 using Infinity.Core.Api;
+using Infinity.Core.Saves;
 using Infinity.Core.Shell;
 
 namespace Infinity.App;
@@ -76,11 +78,31 @@ public sealed partial class ShellViewModel
             PlayButtonKind.Resolve => (S["play.button_resolve"], S["play.resolve_hint"]),
             _ => (S.Format("play.button_play", ("mode", mode)), S.Format("play.not_offered", ("mode", mode), ("game", GameLabel))),
         };
+        // OD-239 BUG 3: an Azimuth button plays this PC's Azimuth save, so its line is that save's (read locally, cached), never the career's
         var stats = slot.Kind is PlayButtonKind.Play or PlayButtonKind.Resolve
-            ? slot.Card is { } started ? PlayStats(started.Career) : S["play.stats_local"]
+            ? slot.Mode != "hardcore" ? AzimuthPlayStats()
+            : slot.Card is { } started ? PlayStats(started.Career) : S["play.stats_local"]
             : string.Empty;
         var (enabled, reason) = PlayButtonEnabled(slot.Kind);
         return new PlayButtonCard(slot.Mode, slot.Kind, mode, title, gamertag, stats, reason ?? note) { Enabled = enabled, Row = row };
+    }
+
+    /// <summary>
+    /// OD-239 BUG 3: the Azimuth button's line, from <c>User_9000000000000</c> of the chosen game as the Save Manager reads it (the cached scan,
+    /// no disk read on navigation): "CR 15,858 · saved …"; when it cannot be read, "Plays this PC's Azimuth save" with why. Never "No progress
+    /// yet": the server keeps no progress of an Azimuth career.
+    /// </summary>
+    private string AzimuthPlayStats()
+    {
+        if (SavesRootNow is not { } root) return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_no_install"]));
+        SaveProfile? save;
+        try { save = SavesList(root).FirstOrDefault(s => s.IsOffline); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_unreadable"])); }
+        if (save is null) return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_none"]));
+        var modified = S.Format("play.stats_modified", ("when", When(save.LastPlayedUtc)));
+        return save.Credits is { } credits
+            ? S.Format("play.stats_credits", ("credits", credits.ToString("N0", SavesCulture))) + "  ·  " + modified
+            : S["play.stats_azimuth"] + "  ·  " + modified;
     }
 
     /// <summary>"LV 15 · CR 15,858 · 22h" from the career's progress; absent progress is "No progress yet" (level 0 is real).</summary>
