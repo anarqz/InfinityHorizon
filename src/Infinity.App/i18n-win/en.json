@@ -1305,6 +1305,7 @@
   "sm.hint_azimuth": "No checks, mods allowed · this PC's own save · the sandbox way",
   "sm.explain.az_title": "The sandbox way",
   "sm.explain.az_body": "AZIMUTH plays your own Azimuth save on this PC: no checks on your progression, mods allowed, nothing saved in the cloud. Leaderboards, clubs and liveries still show your Azimuth gamertag.",
+  "sm.row.level_synced": "{level} · synced {ago}",
   "sm.row.fields": "LV {level}  ·  CR {credits}  ·  {last}",
   "sm.row.cloud": "saved in the cloud",
   "sm.row.local_when": "on this PC, modified {when} · not uploaded yet",

@@ -430,9 +430,10 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// The AZIMUTH card's rows: per catalog game, this PC's <c>User_9000000000000</c> as the PLAY card reads it (the cached scan, no request,
-    /// no disk read past it): its credits and when it was modified; no save is the empty state in the same fields. Its level is "—": the
-    /// driver level is the XP on the game's curve, which stays on the server (CR-S81; game-derived, never in the client). Each row's ⋯ holds
-    /// that save's tools (<see cref="AzimuthMenuOf"/>).
+    /// no disk read past it): its credits and when it was modified; no save is the empty state in the same fields. Its level is the
+    /// server's, from the identity's last profile sync of the game in the cached <c>/me</c> (OD-239 #10; the curve stays server-side,
+    /// CR-S81), marked with that sync's age because it can differ from this PC's save after a copy or restore; "—" without progress. Each
+    /// row's ⋯ holds that save's tools (<see cref="AzimuthMenuOf"/>).
     /// </summary>
     private List<ProfileGameRow> AzimuthRowsOf()
     {
@@ -448,8 +449,8 @@ public sealed partial class ShellViewModel
                 try { save = AzimuthSave(); }
                 catch (SaveException) { unreadable = true; }
                 var line = save is null
-                    ? RowFields(null, null, S[unreadable ? "sm.row.az_unreadable" : _install is null ? "sm.row.az_no_install" : "sm.row.az_none"])
-                    : RowFields(null, save.Credits, S.Format("sm.modified", ("when", When(save.LastPlayedUtc))));
+                    ? RowFields(AzimuthLevel(game), null, S[unreadable ? "sm.row.az_unreadable" : _install is null ? "sm.row.az_no_install" : "sm.row.az_none"])
+                    : RowFields(AzimuthLevel(game), save.Credits, S.Format("sm.modified", ("when", When(save.LastPlayedUtc))));
                 return new ProfileGameRow(AzimuthCardKey, game.Id, art?.Name ?? game.Name, game.ShortName,
                     TileBrush(game.TileAccent, 0xFF), TileBrush(game.TileAccent, 0x2E), line)
                 {
@@ -505,9 +506,21 @@ public sealed partial class ShellViewModel
         return list;
     }
 
-    /// <summary>The row's fields, the same on both cards: "LV 15  ·  CR 15,858  ·  {last}", an unknown number shown "—".</summary>
-    private string RowFields(long? level, long? credits, string last) => S.Format("sm.row.fields",
-        ("level", level?.ToString("N0", SavesCulture) ?? S["sm.unknown"]),
+    /// <summary>
+    /// The AZIMUTH row's level: <c>players[].careers[].progress.level</c> of the identity's career of <paramref name="game"/> in the cached
+    /// <c>/me</c> (no request), with the sync's age ("15 · synced 2 days ago"), never presented as read from this PC's save; null without
+    /// progress (the row shows "—").
+    /// </summary>
+    private string? AzimuthLevel(GameDefinition game)
+    {
+        if (OfflineMode || _session?.Me is not { Players: not null } me || AzimuthIdentity.Of(me) is not { } player) return null;
+        if (player.Careers.FirstOrDefault(c => c.Game == game.Id)?.Progress is not { Level: { } level } progress) return null;
+        return S.Format("sm.row.level_synced", ("level", level.ToString("N0", SavesCulture)), ("ago", Ago(progress.SyncedAt)));
+    }
+
+    /// <summary>The row's fields, the same on both cards: "LV 15  ·  CR 15,858  ·  {last}", an unknown level or number shown "—".</summary>
+    private string RowFields(string? level, long? credits, string last) => S.Format("sm.row.fields",
+        ("level", level ?? S["sm.unknown"]),
         ("credits", credits?.ToString("N0", SavesCulture) ?? S["sm.unknown"]),
         ("last", last));
 
@@ -576,7 +589,7 @@ public sealed partial class ShellViewModel
         if (facts.HasCareerData && facts.Card!.Career!.Progress is { } p)
         {
             var at = facts.Card.Career.Cloud?.SavedAt ?? p.SyncedAt;
-            return RowFields(p.Level, p.Credits, at is null ? S["sm.row.cloud"] : S.Format("sm.modified", ("when", When(at))));
+            return RowFields(p.Level?.ToString("N0", SavesCulture), p.Credits, at is null ? S["sm.row.cloud"] : S.Format("sm.modified", ("when", When(at))));
         }
         if (local is not null)
             return RowFields(null, local.Credits, S.Format(facts.Game.CloudSaves ? "sm.row.local_when" : "sm.modified", ("when", When(local.LastPlayedUtc))));
