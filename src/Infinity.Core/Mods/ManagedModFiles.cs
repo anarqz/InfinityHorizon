@@ -44,13 +44,16 @@ public sealed partial class ManagedModFiles
     internal IModWineOverrides WineOverrides { get; set; } = SystemWineOverrides.Instance;
 
     /// <summary>
-    /// The catalog's Hardcore rule by id (<see cref="ModMultiplayer.HardcorePolicy"/>), so an installed pack whose snapshot predates its
-    /// entry's <c>modes</c> is kept in Hardcore like a fresh install; null: each manifest's own declaration.
+    /// OD-236: the catalog's <c>countsAsModded</c> by id (<see cref="ModMultiplayer.ModdedPolicy"/>), so an installed pack whose snapshot
+    /// predates its entry's declaration is kept in Hardcore like a fresh install; null: each manifest's own declaration.
     /// </summary>
-    public IReadOnlyDictionary<string, bool>? HardcoreCatalog { get; init; }
+    public IReadOnlyDictionary<string, bool>? ModdedCatalog { get; init; }
 
-    /// <summary>A Hardcore profile keeps this mod (<see cref="ModMultiplayer.AllowedInHardcore"/> with <see cref="HardcoreCatalog"/>).</summary>
-    public bool AllowedInHardcore(ModManifest manifest) => ModMultiplayer.AllowedInHardcore(manifest, HardcoreCatalog);
+    /// <summary>OD-236: the mod makes a session modded (<see cref="ModMultiplayer.CountsAsModded"/> with <see cref="ModdedCatalog"/>).</summary>
+    public bool CountsAsModded(ModManifest manifest) => ModMultiplayer.CountsAsModded(manifest, ModdedCatalog);
+
+    /// <summary>A Hardcore profile keeps this mod: it does not count as modded (<see cref="ModMultiplayer.AllowedInHardcore"/>).</summary>
+    public bool AllowedInHardcore(ModManifest manifest) => ModMultiplayer.AllowedInHardcore(manifest, ModdedCatalog);
 
     public ManagedModFiles(string azimuth, string? game, string stateDirectory, Func<bool> gameRunning, string? packageCache = null, IReadOnlyList<string>? launcherRoots = null)
     {
@@ -179,11 +182,11 @@ public sealed partial class ManagedModFiles
         .Select(f => (File: f, Actual: cached ? CachedCurrent(Target(f.Root, f.Path)) : Current(Target(f.Root, f.Path)), Expected: receipt.Enabled ? f.After : f.Before))
         .Where(x => x.Actual != x.Expected).Select(x => new ModDrift(x.File.Root, x.File.Path, x.Expected, x.Actual)).ToList();
 
-    /// <summary>OD-112 follow-up: on a Hardcore profile only a mod for both modes may become enabled (<see cref="AllowedInHardcore"/>).</summary>
+    /// <summary>OD-236: on a Hardcore profile only a mod that does not count as modded may become enabled (<see cref="AllowedInHardcore"/>).</summary>
     private void CheckProfile(ModManifest manifest, bool hardcore)
     {
         if (hardcore && !AllowedInHardcore(manifest))
-            throw new ModException("Hardcore profiles cannot enable mods that affect multiplayer", ModErrors.Hardcore);
+            throw new ModException("Hardcore profiles cannot enable mods that count as modded", ModErrors.Hardcore);
     }
 
     public Task InstallAsync(HttpClient http, ModManifest manifest, IReadOnlyCollection<string> downloadHosts, CancellationToken cancellation,
@@ -430,7 +433,9 @@ public sealed partial class ManagedModFiles
     {
         ArgumentNullException.ThrowIfNull(manifest);
         using var gate = Lock();
-        if (!SetEnabledLocked(manifest, enabled, progress, hardcore)) return;
+        var switched = SetEnabledLocked(manifest, enabled, progress, hardcore);
+        ForgetHeldLocked(manifest); // review 3.1.2: the player's own choice; no Hardcore hold gives it back or takes it away later
+        if (!switched) return;
         ReconcileWineOverrides();
         if (enabled) KeepLoadFirstOnTop();
     }
@@ -498,6 +503,7 @@ public sealed partial class ManagedModFiles
         }
         Execute(new(manifest.Id + ".receipt.json", receipt with { Enabled = false, Files = files }, changes), progress);
         RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
+        ForgetHeldLocked(manifest);
         ReconcileWineOverrides();
     }
 
@@ -534,6 +540,8 @@ public sealed partial class ManagedModFiles
         // so nothing of it stays in mods\ to show as a manual mod
         try { if (SnapshotFor(receipt) is var removed && ExtraOptionsMods.FolderOf(removed) is { } folder) ExtraOptionsMods.DeleteFolder(_azimuth, folder, removed.ModsGame); }
         catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException or InvalidDataException) { }
+        // review 3.1.2: an uninstalled mod leaves the Hardcore holds (nothing to give back)
+        try { ForgetHeldLocked(SnapshotFor(receipt)); } catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException) { }
         ReconcileWineOverrides();
     }
 

@@ -135,7 +135,8 @@ public sealed partial class ShellViewModel
         if (GameRunning()) { Message = S["mods.close_game"]; await RefreshExtraOptionsModsAsync(); return; }
         try
         {
-            await Task.Run(() => ExtraOptionsMods.DeleteFolder(install.Root, item.Folder, item.Game));
+            var held = Path.Combine(_stateDirectory, HardcoreHeldFileFor(item.Game));
+            await Task.Run(() => { ExtraOptionsMods.DeleteFolder(install.Root, item.Folder, item.Game); ExtraOptionsMods.ForgetHeld(held, [item.Folder]); });
             Log("extraoptions mods: " + item.Folder + " deleted");
             Message = S["eomods.deleted"];
         }
@@ -151,7 +152,9 @@ public sealed partial class ShellViewModel
         if (GameRunning()) { Message = S["mods.close_game"]; return; }
         try
         {
-            await Task.Run(() => ExtraOptionsMods.SetEnabled(install.Root, item.Folder, !item.Enabled, item.Game));
+            // review 3.1.2: the player's own choice leaves the Hardcore hold (no later launch gives it back or takes it away)
+            var held = Path.Combine(_stateDirectory, HardcoreHeldFileFor(item.Game));
+            await Task.Run(() => { ExtraOptionsMods.SetEnabled(install.Root, item.Folder, !item.Enabled, item.Game); ExtraOptionsMods.ForgetHeld(held, [item.Folder]); });
             Log("extraoptions mods: " + item.Folder + (item.Enabled ? " off" : " on"));
             Message = S[item.Enabled ? "eomods.now_off" : "eomods.now_on"];
         }
@@ -174,14 +177,14 @@ public sealed partial class ShellViewModel
             .Select(ExtraOptionsMods.FolderOf).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The folders of the game's mods folder that Hardcore keeps: installed, enabled catalog mods for both modes (OD-233: its manifest
-    /// cosmetic; Alex 2026-11-10: or declared for both modes, the car packs, <see cref="AllowedInHardcore"/>). A folder copied by hand, or a
-    /// catalog mod for Noob only, plays only in Noob.
+    /// The folders of the game's mods folder that Hardcore keeps (OD-236): installed, enabled catalog mods that do not count as modded
+    /// (<see cref="AllowedInHardcore"/>, the catalog's <c>countsAsModded: false</c>). A folder copied by hand, or any other catalog mod,
+    /// plays only in Noob. The same folders are the declared set's mods that leave a session not <c>modded</c>.
     /// </summary>
     private HashSet<string> HardcoreSafeFolders(string game = ModManifest.DefaultGame) => EnabledCatalogFolders(game, AllowedInHardcore);
 
     /// <summary>
-    /// The folders the lobby set leaves out: installed, enabled catalog mods that change nothing for other players
+    /// The folders the declared set leaves out: installed, enabled catalog mods that change nothing for other players
     /// (<see cref="ModMultiplayer.AffectsMultiplayer"/>). A car pack kept in Hardcore is not one of them: it stays in the set.
     /// </summary>
     private HashSet<string> CosmeticFolders(string game = ModManifest.DefaultGame) => EnabledCatalogFolders(game, m => !ModMultiplayer.AffectsMultiplayer(m));
@@ -202,22 +205,44 @@ public sealed partial class ShellViewModel
         var game = CurrentGame.Id;
         if (!ExtraOptionsLayout.HasModsFolder(game)) return VanillaModSet.Instance;
         // FM5: the state read for this launch (PrepareExtraOptionsMods), as fresh as the folders it just arranged
-        // Noob: only cosmetic mods stay out. Hardcore: everything it kept stays out (car packs too), since the gate admits no modded Hardcore
-        // session (GATE_API §2 "Hardcore is never modded", 400) and the set is display only; MACBOOK's change would let Hardcore declare them
-        var hardcore = ProfileHardcore;
-        var cosmetic = game == "fm5" && _fm5LaunchState is { } fm5 ? (hardcore ? fm5.BothModes : fm5.Cosmetic) : hardcore ? HardcoreSafeFolders(game) : CosmeticFolders(game);
+        // OD-236: both modes declare their real set (cosmetic mods stay out); the mods that do not count as modded leave the session not
+        // modded, so a Hardcore session (it kept only those) declares its car packs with modded=false, as the gate requires
+        var fm5 = game == "fm5" ? _fm5LaunchState : null;
+        var cosmetic = fm5?.Cosmetic ?? CosmeticFolders(game);
+        var notModded = fm5?.BothModes ?? HardcoreSafeFolders(game);
+        if (ProfileHardcore)
+        {
+            // review 3.1.2 (finding 4): Hardcore is never modded (the gate's 400). Whatever the launch preparation could not turn off (a
+            // hand-copied line it could not write, a mod whose receipt refused) is left out of the declared set, said in the log, never a 400
+            try
+            {
+                var root = install.Root;
+                var left = await Task.Run(() => ExtraOptionsMods.Scan(root, game).Where(m => m.Enabled && !notModded.Contains(m.Folder) && !cosmetic.Contains(m.Folder))
+                    .Select(m => m.Folder).ToList());
+                if (left.Count > 0)
+                {
+                    Log("mods: Hardcore: " + string.Join(", ", left) + " still on and not declared (they count as modded; the session stays not modded)");
+                    cosmetic = new HashSet<string>(cosmetic.Concat(left), StringComparer.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+            { Log("mods: Hardcore: mods folder not read (" + e.GetType().Name + "); nothing is declared"); return VanillaModSet.Instance; }
+        }
         // T-1110-NOMODMATCH (Alex 2026-11-10: "The only thing we'll hold now, is show to other users which mods they're using"): the set is
         // display only, so it never stops Play: past the cap the first ones by id are declared, unreadable files are declared unhashed
         foreach (var hash in new[] { true, false })
         {
             try
             {
-                var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, game, hash));
+                var plan = await Task.Run(() => ExtraOptionsModSetSource.PlanFor(install.Root, cosmetic, game, hash, notModded));
+                var source = new ExtraOptionsModSetSource(install.Root, plan, launchUtc, game);
                 Log("mods: declared set planned from ExtraOptions" + (hash ? "" : " (files not hashed)") + ": "
-                    + (plan.Count == 0 ? "none" : string.Join(", ", plan.Select(p => p.Entry.Id + " " + p.Entry.Version))));
+                    + (plan.Count == 0 ? "none" : string.Join(", ", plan.Select(p => p.Entry.Id + " " + p.Entry.Version + (p.CountsAsModded ? "" : " (not modded)"))))
+                    + "; modded=" + (source.Modded ? "true" : "false")
+                    + (!source.Modded && plan.Count > 0 && !ModSets.UnmoddedSetsAccepted ? " (set not sent until the server accepts it)" : ""));
                 if (plan.Count == MatchmakingLimits.ModsMax && await Task.Run(() => ExtraOptionsModSetSource.CountFor(install.Root, cosmetic, game)) is var all and > MatchmakingLimits.ModsMax)
-                    Log("mods: " + all + " mods loaded; the first " + MatchmakingLimits.ModsMax + " by id are declared");
-                return new ExtraOptionsModSetSource(install.Root, plan, launchUtc, game);
+                    Log("mods: " + all + " mods loaded; the first " + MatchmakingLimits.ModsMax + " are declared");
+                return source;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ModSetException)
             { Log("mods: declared set not planned" + (hash ? "" : " without hashing") + " (" + e.GetType().Name + ")"); }
@@ -226,8 +251,8 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>
-    /// OD-233: the launcher's FM5 mods as read for one launch: the enabled catalog folders for both modes (what Hardcore keeps) and the
-    /// cosmetic ones among them (what the lobby set leaves out).
+    /// OD-233: the launcher's FM5 mods as read for one launch: the enabled catalog folders that do not count as modded (OD-236: what
+    /// Hardcore keeps) and the cosmetic ones (what the declared set leaves out).
     /// </summary>
     private sealed record Fm5LaunchState(HashSet<string> BothModes, HashSet<string> Cosmetic);
 
@@ -248,7 +273,7 @@ public sealed partial class ShellViewModel
         if (health.RecoveryHere || health.Problems.Count > 0 || health.Installed.Any(i => i.Problem is not null || i.Manifest is null)) return null;
         var mine = health.Installed.Where(i => i.Enabled && i.Manifest!.ModsGame == game && !i.Manifest.Retired).ToList();
         HashSet<string> Folders(IEnumerable<ModInstallation> list) => list.Select(i => ExtraOptionsMods.FolderOf(i.Manifest!)).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
-        // the manager's HardcoreCatalog: the catalog's rule as the factory took it on the UI thread
+        // the manager's ModdedCatalog: the catalog's countsAsModded as the factory took it on the UI thread
         return new(Folders(mine.Where(i => manager.AllowedInHardcore(i.Manifest!))), Folders(mine.Where(i => !ModMultiplayer.AffectsMultiplayer(i.Manifest!))));
     }
 

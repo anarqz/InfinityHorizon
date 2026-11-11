@@ -65,28 +65,30 @@ public sealed class ModManifest
     public bool LoadFirst { get; }
 
     /// <summary>
-    /// The profile modes the manifest itself declares (<c>modes</c>: <c>["noob"]</c> or <c>["noob", "hardcore"]</c>; Noob takes any mod,
-    /// OD-233), or null when it declares none. Alex 2026-11-10 ("Car Packs mods from InfinityCatalog = Can be used in Hardcore"): a car pack
-    /// declares both modes while its multiplayer impact stays <c>gameplay</c>, so Hardcore keeps it and it still enters the lobby set.
-    /// A catalog entry's declaration stands for an installed copy of the same mod (<see cref="ModMultiplayer.AllowedInHardcore"/>).
+    /// OD-236 (Alex 2026-11-10: "Hardcore with car packs. These mods are not counting as modded. Players can use spotify-radio, carpacks,
+    /// garage-revving on HARDCORE"): the manifest's own <c>countsAsModded</c> (a JSON boolean; anything else is refused), or null when it
+    /// declares none. A mod declared <c>false</c> never makes a session <c>modded</c> and is the only kind a Hardcore profile keeps on
+    /// (<see cref="ModMultiplayer.CountsAsModded"/>, where a catalog entry's declaration stands for an installed copy of the same id).
     /// </summary>
-    public IReadOnlyList<string>? Modes { get; }
+    public bool? CountsAsModdedDeclared { get; }
 
     /// <summary>
-    /// What this manifest says about Hardcore profiles: its <see cref="Modes"/> when it declares them, else OD-233's rule (both modes when
-    /// it changes nothing for other players, <see cref="ModMultiplayer.AffectsMultiplayer"/>; Noob only otherwise).
+    /// Whether this manifest makes a session <c>modded</c>: its <see cref="CountsAsModdedDeclared"/>; undeclared, true, except (until the
+    /// official catalog carries the field, OD-236) an official car pack (<see cref="IsCarPack"/>) or a mod whose multiplayer impact is
+    /// cosmetic (OD-233's "both modes" rule, <see cref="ModMultiplayer.AffectsMultiplayer"/>), which kept their place in Hardcore before it.
     /// </summary>
-    public bool DeclaresHardcore => Modes is { } modes ? modes.Contains(HardcoreMode, StringComparer.Ordinal) : IsCarPack || !ModMultiplayer.AffectsMultiplayer(this);
+    public bool CountsAsModded => CountsAsModdedDeclared ?? !(IsCarPack || !ModMultiplayer.AffectsMultiplayer(this));
 
     /// <summary>
-    /// Until the catalog's car packs declare <see cref="Modes"/>: an official car pack (OD-231/OD-232, the ZephyrSkies packs and their Commons)
-    /// is a catalog mod made of the player's own files (<see cref="IsExternal"/>) that carries content only (database, strings, media: no
-    /// binary, no plugin, nothing executable). Alex 2026-11-10: such packs stay on in Hardcore.
+    /// The transitional rule of <see cref="CountsAsModded"/> for an undeclared manifest: an official car pack (OD-231/OD-232, the ZephyrSkies
+    /// packs and their Commons) is a catalog mod made of the player's own files (<see cref="IsExternal"/>) that carries content only
+    /// (database, strings, media: no binary, no plugin, nothing executable).
     /// </summary>
     public bool IsCarPack => IsExternal && Files.Count > 0 && Files.All(f => f.Role != "binary" && !ExecutableExtension(f.Destination)
         && !f.Destination.Contains("/plugins/", StringComparison.OrdinalIgnoreCase));
 
-    public const string NoobMode = "noob", HardcoreMode = "hardcore";
+    /// <summary>The manifest field of <see cref="CountsAsModdedDeclared"/>.</summary>
+    public const string CountsAsModdedField = "countsAsModded";
 
     /// <summary>A manifest from a catalog or a development file: anything that is not an ExtraOptions mod is refused (OD-232).</summary>
     public ModManifest(byte[] bytes) : this(bytes, installed: false) { }
@@ -276,14 +278,14 @@ public sealed class ModManifest
             if (loadOrder.ValueKind != JsonValueKind.String || loadOrder.GetString() != "first") throw new ModException("invalid load order");
             LoadFirst = true;
         }
-        // Noob takes any mod (OD-233), so a declaration always names it; "hardcore" adds Hardcore profiles. Anything else is refused.
-        if (Document.TryGetProperty("modes", out var modes))
-        {
-            var names = modes.ValueKind == JsonValueKind.Array ? modes.EnumerateArray().Select(m => m.ValueKind == JsonValueKind.String ? m.GetString()! : "").ToArray() : [];
-            if (names.Length is < 1 or > 2 || names.Distinct(StringComparer.Ordinal).Count() != names.Length || !names.Contains(NoobMode, StringComparer.Ordinal)
-                || names.Any(n => n is not (NoobMode or HardcoreMode))) throw new ModException("invalid modes");
-            Modes = Array.AsReadOnly(names);
-        }
+        // OD-236: a JSON boolean only (a string "false" or a number is refused like any invalid field)
+        if (Document.TryGetProperty(CountsAsModdedField, out var counts))
+            CountsAsModdedDeclared = counts.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => throw new ModException("invalid countsAsModded"),
+            };
         if (Document.TryGetProperty("incompatibleFiles", out var incompatible))
             foreach (var file in incompatible.EnumerateArray())
             {
@@ -389,8 +391,8 @@ public sealed class ModManifest
 
     /// <summary>
     /// OD-233: paths (<c>destination</c>, <c>path</c>) compare in their per-game form, so a catalog that moved to it is no update. The top-level
-    /// <c>modes</c> is left out: it is the catalog's policy, not the mod's files (a pack installed before its entry declared both modes is the
-    /// same pack, and is never asked for again), and <see cref="ModMultiplayer.AllowedInHardcore"/> reads it from the catalog entry.
+    /// <c>countsAsModded</c> (OD-236) is left out: it is the catalog's policy, not the mod's files (a pack installed before its entry declared
+    /// it is the same pack, and is never asked for again), and <see cref="ModMultiplayer.CountsAsModded"/> reads it from the catalog entry.
     /// </summary>
     private static byte[] Canonical(JsonElement element, string game)
     {
@@ -404,7 +406,7 @@ public sealed class ModManifest
             {
                 case JsonValueKind.Object:
                     writer.WriteStartObject();
-                    foreach (var property in value.EnumerateObject().Where(p => !root || p.Name != "modes").OrderBy(p => p.Name, StringComparer.Ordinal))
+                    foreach (var property in value.EnumerateObject().Where(p => !root || p.Name != CountsAsModdedField).OrderBy(p => p.Name, StringComparer.Ordinal))
                     { writer.WritePropertyName(property.Name); Write(writer, property.Value, property.Name); }
                     writer.WriteEndObject(); break;
                 case JsonValueKind.Array:

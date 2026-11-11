@@ -250,7 +250,7 @@ public sealed partial class ShellViewModel
         ModLaunchPreparation mods;
         // Alex 2026-11-10: Hardcore turns off what it does not keep (never a refusal); the next Noob launch gives it back. It runs here,
         // under the Play's overlay and its lock (hotfix 3.1.2), and a stop below still says "play: not started: <reason>"
-        try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore"); }
+        try { mods = await PrepareModsForLaunchAsync(hardcore: LobbyProfile?.Mode == "hardcore", online: true); }
         catch (ModException error) when (error.Code == ModErrors.Recovery)
         { Message = S["mods.play_blocked"]; RefreshModCards(); return; }
         catch (Exception error) when (ManagedModFiles.IsStateError(error))
@@ -259,15 +259,12 @@ public sealed partial class ShellViewModel
             Log("mods: launch preparation failed: " + error.GetType().Name + (error is ModException code ? " " + code.Code : "") + ": " + error.Message);
             mods = ModLaunchPreparation.None;
         }
-        // OD-232: an enabled mod in a retired format still changes the game (half a media override, a loader DLL), so it never goes
-        // online as vanilla: refused until it is disabled or removed on Mods (offline it stays a warning).
+        // OD-232, Alex 2026-11-10 (review 3.1.2, finding 6): an enabled mod in a retired format never goes online, and no longer stops Play:
+        // the preparation above turned it off for good (one line says how many); one it could not turn off is logged, the launch goes on
         if (cancelled.IsCancellationRequested) return;
+        if (RetiredTurnedOff > 0) SetStatus(S.Format("mods.retired_turned_off", ("count", RetiredTurnedOff.ToString(CultureInfo.CurrentCulture))));
         if (mods.RetiredOnlineMods is { Count: > 0 } retired)
-        {
-            Log("mods: online refused, retired mods enabled: " + string.Join(", ", retired.Select(m => m.Id)));
-            Message = RetiredOnlineRefusal(retired.Select(m => m.Text("name", S.Locale)));
-            RefreshModCards(); return;
-        }
+            Log("mods: retired-format mods still enabled (not turned off): " + string.Join(", ", retired.Select(m => m.Id)));
         if (!ReferenceEquals(_session, startingSession) || !CanPlay) { PlayStopped(); return; }
         var startingInstall = _install;
         var startingGame = _gate.Game;
@@ -352,6 +349,7 @@ public sealed partial class ShellViewModel
             handoff => new WindowsPipe(PipeServer.Create(handoff.PipeName)),
             e => _ui.Post(_ => Render(e), null), _commands.Reader,
             uiPipes: handoff => new WindowsPipe(PipeServer.Create(handoff.UiPipeName)));
+        _supervisor = supervisor; // review 3.1.2 (finding 5): the overlay's Cancel stops its preparation at the next checkpoint
         // BUG-0001: the online session's drivatar caches never reach offline play.
         var caches = SwitchCaches(_install.Root, online: true);
         _playOnlineActivity = onlineActivity;
@@ -382,6 +380,7 @@ public sealed partial class ShellViewModel
             }
             catch (Exception error) when (!IsFatal(error)) { Log("play: after-session refresh failed: " + error.GetType().Name); } // the session's end still completes
             _commands = null;
+            if (ReferenceEquals(_supervisor, supervisor)) _supervisor = null;
             if (ReferenceEquals(_playOnlineActivity, onlineActivity)) _playOnlineActivity = null;
             _playWorlds = null;
             _playModSet = null;

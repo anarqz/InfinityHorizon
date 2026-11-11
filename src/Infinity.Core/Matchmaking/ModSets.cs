@@ -41,6 +41,12 @@ public interface IModSetSource
 
     ModSetState State { get; }
 
+    /// <summary>
+    /// OD-236: the gate's <c>modded</c> flag for this session: the planned set holds a mod that counts as modded (the catalog's
+    /// <c>countsAsModded</c> is not <c>false</c>; a hand-copied or unknown mod always counts). By default any planned mod counts.
+    /// </summary>
+    bool Modded => Planned.Count > 0;
+
     /// <summary>Raised after <see cref="State"/> changed (any thread).</summary>
     event EventHandler<ModSetState>? Changed;
 }
@@ -70,12 +76,33 @@ public sealed class ModSetException(string message) : Exception(message)
 public static class ModSets
 {
     /// <summary>
-    /// The gate's <c>modded</c> flag (GATE_API.md §2 "Modded sessions"): exactly when the launch's multiplayer set is
-    /// not empty. The server then requires that set on every host PUT and refuses it from a non-modded session, so
-    /// a cosmetic-only plan (an empty set) never sets it. A plan that failed to build is not modded, and its
-    /// <see cref="ModSetPhase.Failed"/> state keeps the session out of every lobby instead.
+    /// The gate's <c>modded</c> flag (GATE_API.md §2 "Modded sessions"; OD-236): exactly when the launch's declared set holds a mod that
+    /// counts as modded (<see cref="IModSetSource.Modded"/>). The server then requires that set on every join and host PUT, and records
+    /// no results for the session; a cosmetic-only plan (an empty set) or a set of mods that do not count never sets it.
     /// </summary>
-    public static bool Modded(IModSetSource? source) => source is not null && source.Planned.Count > 0;
+    public static bool Modded(IModSetSource? source) => source is not null && source.Modded;
+
+    /// <summary>
+    /// OD-236: whether the server accepts a non-empty declared set from a session admitted without <c>modded</c> (a Hardcore session with
+    /// car packs, a Noob one with only mods that do not count). MACBOOK confirmed 2026-11-10 that production accepts it (≤ 100, joins,
+    /// requests, host PUT, invites; MATCHMAKING_API §2.7, image selfhost-35d7b835), so it is on; the switch stays for a server that refuses
+    /// it again (off: such a session declares no set on the wire, its real set still planned and logged).
+    /// </summary>
+    public static bool UnmoddedSetsAccepted { get; set; } = true;
+
+    /// <summary>
+    /// The set a session puts on the wire (null: none): what ExtraOptions reported loaded once it answered, else the launch's planned set.
+    /// A modded session always declares a non-empty set (the server's 400 <c>{field: "mods"}</c> otherwise); a session that is not modded
+    /// declares its real set only when <paramref name="unmoddedAccepted"/> (<see cref="UnmoddedSetsAccepted"/>).
+    /// </summary>
+    public static IReadOnlyList<ModEntry>? Wire(IModSetSource source, bool unmoddedAccepted)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!Modded(source) && !unmoddedAccepted) return null;
+        var state = source.State;
+        if (state.Phase == ModSetPhase.Ready && state.Mods.Count > 0) return state.Mods;
+        return source.Planned.Count > 0 ? source.Planned : null;
+    }
 
     /// <summary>
     /// The set as the contract takes it (≤ <see cref="MatchmakingLimits.ModsMax"/>, valid ids, versions and fingerprints, unique, sorted),

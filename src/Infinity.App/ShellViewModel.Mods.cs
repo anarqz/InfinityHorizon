@@ -43,7 +43,13 @@ public sealed partial class ShellViewModel
     // OD-206 (W11): the page lists the mods that declare the chosen game (none declared: FH2) and that game's built-in options card
     public bool CanOpenMods => (InShell && _install is not null || DevelopmentMods) && !ModOperationBusy && CurrentGame.HasModsPage;
     public bool ShowModOptions => _showModOptions && ShowMods && _ini is not null && _externalMod is null;
-    public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking;
+    public bool ModsIdle => !_busy && !Playing && !LauncherUpdateBusy && !IntegrityChecking && !PlayAttemptStopping;
+
+    /// <summary>
+    /// Review 3.1.2 (finding 7): a cancelled Play attempt is still unwinding (its Hardcore hold or load-order step may still write): mod
+    /// operations wait for it, with the reason (<c>mods.wait.play_stopping</c>), so nothing races its writes.
+    /// </summary>
+    private bool PlayAttemptStopping => _playAttempt is { IsCancellationRequested: true };
     public bool ModsNews => _catalogLoaded && !_onMods && ModCards.Any(c => c.CanAct && (c.UpdateAvailable || c.Action == S["mods.install"]));
     public string ModsTag => S["mods.tag_new"];
     public bool IniDirty => _iniDirty && ModsIdle;
@@ -147,39 +153,52 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>The launcher's mods a Hardcore launch of <paramref name="game"/> turned off, to give back at the next Noob or offline launch.</summary>
-    private string ManagedHardcoreHeldFile(string game) => System.IO.Path.Combine(_stateDirectory, "managed-hardcore-held-" + game + ".json");
+    private string ManagedHardcoreHeldFile(string game) => ManagedHardcoreHeldFileIn(_stateDirectory, game);
+
+    private static string ManagedHardcoreHeldFileIn(string stateDirectory, string game) => System.IO.Path.Combine(stateDirectory, "managed-hardcore-held-" + game + ".json");
 
     /// <summary>
     /// Before every launch, off the UI thread (H4d, §1.3): locked settings enforced and Wine overrides
     /// reconciled. Nothing installed: nothing read or written. Hardcore turns off what it does not keep first (HoldForHardcore).
     /// </summary>
-    private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync(bool hardcore = false)
+    /// <param name="online">
+    /// Alex 2026-11-10 (review 3.1.2, finding 6): an online launch turns off every enabled mod in a retired format (OD-232) first and never
+    /// gives it back; <see cref="RetiredTurnedOff"/> says how many, the launch goes on.
+    /// </param>
+    private async Task<ModLaunchPreparation> PrepareModsForLaunchAsync(bool hardcore = false, bool online = false)
     {
+        RetiredTurnedOff = 0;
         // OD-233: FM5 has its own mods (locks, Wine overrides, Hardcore's refusal), each launch only its own game's
         if (!Infinity.Core.Mods.ExtraOptionsLayout.HasModsFolder(CurrentGame.Id) || ModManagerFactory() is not { } factory) return ModLaunchPreparation.None;
         var game = CurrentGame.Id;
         var heldFile = ManagedHardcoreHeldFile(game);
-        ModLaunchPreparation prepared; var hold = ModHoldResult.None;
+        ModLaunchPreparation prepared; var hold = ModHoldResult.None; var retired = ModHoldResult.None;
         for (var attempt = 0; ; attempt++)
         {
             // Startup retention may hold the bucket lock for a moment: wait for it rather than refuse the launch.
             // Alex 2026-11-10: Hardcore turns off (and the next Noob launch gives back) what it does not keep, never a refusal
             try
             {
-                (hold, prepared) = await Task.Run(() =>
+                (retired, hold, prepared) = await Task.Run(() =>
                 {
                     var manager = factory();
+                    var off = online ? manager.DisableRetiredForOnline(game) : ModHoldResult.None;
                     var held = manager.HoldForHardcore(game, hardcore, heldFile);
-                    return (held, manager.PrepareForLaunch(hardcore, game));
+                    return (off, held, manager.PrepareForLaunch(hardcore, game));
                 });
                 break;
             }
             catch (ModException error) when (error.Code == ModErrors.Busy && attempt < 20) { await Task.Delay(250); }
         }
-        foreach (var note in hold.Notes) Log(note);
+        foreach (var note in retired.Notes.Concat(hold.Notes)) Log(note);
         foreach (var warning in prepared.Warnings) Log("mods: " + warning);
+        RetiredTurnedOff = retired.Changed.Count;
         // only the mods it switched are read again (owner 2026-11-10: no full read at PLAY)
-        if (hold.Changed.Count > 0) await RefreshModEntriesAsync(hold.Changed);
+        var switched = retired.Changed.Concat(hold.Changed).Distinct(StringComparer.Ordinal).ToList();
+        if (switched.Count > 0) await RefreshModEntriesAsync(switched);
         return prepared;
     }
+
+    /// <summary>How many retired-format mods the last online launch preparation turned off (finding 6), for its one line.</summary>
+    internal int RetiredTurnedOff { get; private set; }
 }

@@ -103,14 +103,16 @@ public static class ExtraOptionsMods
     /// start). Game closed (the caller's check). Returns
     /// how many lines changed.
     /// </summary>
-    public static int SetAllEnabled(string azimuthRoot, bool enabled, IReadOnlySet<string> except, string game = ModManifest.DefaultGame)
+    /// <param name="changedFolders">Filled with the folders whose line changed, once the file is written.</param>
+    public static int SetAllEnabled(string azimuthRoot, bool enabled, IReadOnlySet<string> except, string game = ModManifest.DefaultGame,
+        List<string>? changedFolders = null)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         ArgumentNullException.ThrowIfNull(except);
         var mods = Scan(azimuthRoot, game).Where(m => !except.Contains(m.Folder)).ToList();
         if (mods.Count == 0) return 0;
         var file = ReadLoadOrder(azimuthRoot, game);
-        var changed = 0;
+        var changed = 0; var folders = new List<string>();
         foreach (var mod in mods)
         {
             var wanted = enabled ? mod.Folder : "# " + mod.Folder;
@@ -127,9 +129,10 @@ public static class ExtraOptionsMods
                 if (file.Lines.Count > 0 && file.Lines[^1].Length == 0) file.Lines.RemoveAt(file.Lines.Count - 1);
                 file.Lines.Add(wanted);
             }
-            changed++;
+            changed++; folders.Add(mod.Folder);
         }
         if (changed > 0) WriteLoadOrder(azimuthRoot, file, game);
+        changedFolders?.AddRange(folders);
         return changed;
     }
 
@@ -276,6 +279,20 @@ public static class ExtraOptionsMods
     {
         ArgumentNullException.ThrowIfNull(stateFile);
         if (File.Exists(stateFile) && ReadHeld(stateFile).Count > 0) WriteHeld(stateFile, [], empty: true);
+    }
+
+    /// <summary>
+    /// Review 3.1.2: the player's own change of <paramref name="folders"/> (Enable all / Disable all, one mod's toggle or delete) is theirs:
+    /// those folders leave <paramref name="stateFile"/>, so a later launch never gives back what they turned off since; the rest stays held.
+    /// </summary>
+    public static void ForgetHeld(string stateFile, IEnumerable<string> folders)
+    {
+        ArgumentNullException.ThrowIfNull(stateFile);
+        ArgumentNullException.ThrowIfNull(folders);
+        if (!File.Exists(stateFile)) return;
+        var held = ReadHeld(stateFile);
+        var gone = folders.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (held.RemoveAll(gone.Contains) > 0) WriteHeld(stateFile, held, empty: true);
     }
 
     /// <summary>

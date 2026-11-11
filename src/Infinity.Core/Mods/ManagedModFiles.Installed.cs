@@ -9,7 +9,7 @@ public sealed record ModLaunchPreparation(IReadOnlyList<string> DllOverrides, IR
     public static ModLaunchPreparation None { get; } = new([], []);
     /// <summary>
     /// Enabled mods that affect multiplayer (<see cref="ModMultiplayer.AffectsMultiplayer"/>, the declared set's). A Hardcore launch turns off
-    /// those not for both modes first (<see cref="ManagedModFiles.HoldForHardcore"/>; a car pack is one of these and is kept).
+    /// those that count as modded first (<see cref="ManagedModFiles.HoldForHardcore"/>, OD-236; a car pack is one of these and is kept).
     /// </summary>
     public IReadOnlyList<ModManifest> MultiplayerMods { get; init; } = [];
     /// <summary>
