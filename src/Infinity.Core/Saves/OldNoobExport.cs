@@ -40,15 +40,15 @@ public static class OldNoobExport
     public const string RefusedKey = "export.refused_azimuth_folder";
 
     /// <summary>
-    /// The adapter (the one place that reads which old lines exist): today's <c>/me</c>, an active <c>noob</c> profile's career whose
-    /// <c>cloud</c> still names a revision. MACBOOK keeps exposing that line, marked read-only, until the erase; when its contract names the
-    /// read-only field, it is read here (and only here), the rest of the launcher unchanged.
+    /// The adapter (the one place that reads which old lines exist): <c>/me</c>, an active profile's career whose <c>cloud</c> is
+    /// <c>exportOnly: true</c> (CR-S111, CAREERS.md §7: no save line, the old head kept until the erase) and names a revision. A live
+    /// Hardcore line has no <c>exportOnly</c> and is never offered.
     /// </summary>
     public static IReadOnlyList<OldNoobLine> Lines(Me? me)
     {
         if (me?.Players is not { } players) return [];
-        return [.. players.Where(p => p.Mode == "noob" && p.Status == "active")
-            .SelectMany(p => p.Careers.Where(c => c.Cloud is { Revision: > 0 })
+        return [.. players.Where(p => p.Status == "active")
+            .SelectMany(p => p.Careers.Where(c => c.Cloud is { ExportOnly: true, Revision: > 0 })
                 .Select(c => new OldNoobLine(p.ProfileId, p.Gamertag, p.Xuid, c.Game, c.CareerId, c.Cloud!.Revision, c.Cloud.SavedAt)))];
     }
 

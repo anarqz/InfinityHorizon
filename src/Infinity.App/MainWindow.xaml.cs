@@ -494,12 +494,6 @@ public partial class MainWindow : Window
 
     private void OnQuitGame(object sender, RoutedEventArgs e) => _vm.QuitGame();
 
-    private void OnOpenSavePicker(object sender, RoutedEventArgs e) => _vm.OpenSavePicker();
-
-    private async void OnPickSave(object sender, RoutedEventArgs e) => await _vm.PickSaveAsync((SaveChoice)((FrameworkElement)sender).DataContext);
-
-    private void OnSkipSave(object sender, RoutedEventArgs e) => _vm.SkipSave();
-
     // OD-133: restore a career a fresh start moved aside on this PC
     private async void OnOpenCareerRestore(object sender, RoutedEventArgs e) => await _vm.OpenCareerRestoreAsync();
 

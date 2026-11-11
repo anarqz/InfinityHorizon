@@ -16,13 +16,11 @@ public sealed partial class ShellViewModel
     public bool CanCreateOnlineAccount => CanStartOnlineAccount && _registrationEnabled;
     public bool ShowRegistrationDisabled => !_registrationEnabled;
     private bool _localIdentity;
-    private CloudLines? _cloudLines;
 
     private void ObserveRegistration(ServerInfo info)
     {
         _registrationEnabled = info.RegistrationEnabled;
         _localIdentity = info.Idp?.IsLocal == true;
-        _cloudLines = info.Saves?.Cloud;
         _hardcoreFromProfile = info.Saves?.HardcoreFromProfile == true; // CR-S52
         Changed(string.Empty);
     }

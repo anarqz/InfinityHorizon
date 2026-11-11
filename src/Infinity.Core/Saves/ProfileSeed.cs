@@ -80,11 +80,12 @@ public static class ProfileSeed
 
     /// <summary>
     /// The one condition for offering "Start from one of my profiles" on the Hardcore creation: the server allows it
-    /// (<c>/info saves.hardcoreFromProfile</c>) and the new Hardcore profile keeps a cloud line here (CR-S51 flags), since the seed is a
+    /// (<c>/info saves.hardcoreFromProfile</c>) and the Hardcore profile keeps a cloud line (every one does, CR-S111, unless its own
+    /// <c>cloudLine</c> says false), since the seed is a
     /// commit at revision 0 of that line. Kept in one place: whether a Hardcore profile saved only on this PC may use it is the server
     /// owner's to settle.
     /// </summary>
-    public static bool Offered(bool serverAllows, bool hardcoreKeepsCloud) => serverAllows && hardcoreKeepsCloud;
+    public static bool Offered(bool serverAllows, bool cloudLine) => serverAllows && cloudLine;
 
     /// <summary>
     /// The profiles a Hardcore profile may start from (§4.10 "the source"): the account's own live profiles on the server, of the same

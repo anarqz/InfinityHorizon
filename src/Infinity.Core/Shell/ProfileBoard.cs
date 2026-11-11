@@ -42,9 +42,8 @@ public enum CareerProgressKind
 
 /// <summary>The server facts the board reads beside <c>/me</c>.</summary>
 /// <param name="HardcoreFromProfile"><c>ServerInfo.saves.hardcoreFromProfile</c> (SAVES_API.md §4.10, OD-214).</param>
-/// <param name="HardcoreKeepsCloud">A Hardcore profile of this account keeps a cloud line on this server (OD-52).</param>
 /// <param name="SeedPendingXuids">Profiles whose career of the game holds an accepted seed waiting for its first Play on this PC (a pending <c>seed_from_profile</c>): they count as started, never as empty (review M1).</param>
-public sealed record BoardFlags(bool HardcoreFromProfile, bool HardcoreKeepsCloud, IReadOnlySet<string>? SeedPendingXuids = null);
+public sealed record BoardFlags(bool HardcoreFromProfile, IReadOnlySet<string>? SeedPendingXuids = null);
 
 /// <summary>
 /// One profile on the Profiles page of the chosen game: the <see cref="Player"/>, its career of the game (<see cref="Career"/> and, joined by

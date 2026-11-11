@@ -33,7 +33,7 @@ public sealed partial class ShellViewModel
     // A custom server (CR-L39) is never a development server: its own pinned keys, the release hook rules.
     private bool DevServer => !_config.Production && !_config.Custom && Infinity.Core.DevNet.PlainHttpUrl(_config.Server.GetLeftPart(UriPartial.Authority));
 
-    public bool ShowSetup => InShell && _onSetup && !ShowPickSave;
+    public bool ShowSetup => InShell && _onSetup;
 
     public AzimuthStatus SetupStatus => AzimuthSetup.StatusOf(_install, _hook);
 

@@ -44,10 +44,8 @@ public sealed partial class ShellViewModel
     /// <summary>CR-S69: the account's badge (and which of the server's Hardcore cloud lines is its), never a gate.</summary>
     private bool IsSupporter => _session?.Me?.Access.Tier == "vip";
 
-    /// <summary>CR-S51: this server keeps a new Hardcore profile of this account in the cloud (absent policy = OD-52, a Supporter's).</summary>
-    public bool HardcoreKeepsCloud => IsSupporter ? _cloudLines?.HardcoreVip ?? true : _cloudLines?.HardcoreFree ?? false;
-
-    public string HardcoreHint => S[HardcoreKeepsCloud ? "modes.hardcore_hint" : "modes.hardcore_hint_local"];
+    /// <summary>CR-S111 (OD-239): the hint follows the mode alone: every Hardcore career keeps a cloud save, free or Supporter.</summary>
+    public string HardcoreHint => S["modes.hardcore_hint"];
 
     /// <summary>OD-239: an Azimuth profile plays the player's own Azimuth save; there is no cloud wording to choose.</summary>
     public string NoobHint => S["modes.noob_hint"];
@@ -62,7 +60,7 @@ public sealed partial class ShellViewModel
             _newHardcore = value;
             Changed(nameof(NewHardcore));
             Changed(nameof(NewNoob));
-            Changed(nameof(AzimuthNameWarning));
+            Changed(nameof(ShowAzimuthNameWarning));
             ChangedSeedForm(); // CR-S52: "Start from one of my profiles" is a Hardcore option
         }
     }
@@ -265,14 +263,10 @@ public sealed partial class ShellViewModel
     public string ModeLine(Profile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        if (profile.Mode != "hardcore")
-        {
-            // OD-239: an Azimuth profile plays the player's own Azimuth save, never a cloud line (whatever an older server says)
-            return S["sm.noob"] + " · " + S["modes.noob_own_save"];
-        }
-        // CR-S51: the server says whether this profile keeps a cloud line; without it (an older server), what this server's
-        // cloud lines say for the account (CR-S69: never a Supporter-only wording)
-        return "HARDCORE · " + S[(profile.CloudLine ?? HardcoreKeepsCloud) ?"modes.hardcore_cloud" : "modes.hardcore_local"];
+        // OD-239/CR-S111: the mode decides (an Azimuth profile never reads a cloud line, whatever an older server says); CR-S69:
+        // never a Supporter-only wording
+        return (profile.Mode == "hardcore" ? "HARDCORE" : S["sm.noob"]) + " · "
+            + S[PlayBoard.SaveWordsKey(profile.Mode, profile.Mode == "hardcore" ? profile.CloudLine : null)];
     }
 }
 

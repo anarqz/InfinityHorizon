@@ -2637,41 +2637,6 @@
               </DockPanel>
             </Border>
           </Grid>
-
-          <!-- OD-41: start the profile from one of Azimuth's own saves on this PC (backed up, then cloned). -->
-          <DockPanel MaxWidth="580" HorizontalAlignment="Center" VerticalAlignment="Center"
-                     Visibility="{Binding ShowPickSave, Converter={StaticResource Visible}}">
-            <StackPanel DockPanel.Dock="Top">
-              <TextBlock Text="{Binding S[saves.pick_title]}" Style="{StaticResource PageTitle}" />
-              <TextBlock Text="{Binding PickSaveText}" Margin="0,8,0,16" Style="{StaticResource PageSubtitle}" />
-            </StackPanel>
-            <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
-              <Button Margin="0,5" Padding="20,14" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                      Click="OnSkipSave" IsEnabled="{Binding Idle}">
-                <StackPanel>
-                  <TextBlock Text="{Binding S[saves.new_career]}" FontWeight="Bold" />
-                  <TextBlock Text="{Binding S[saves.new_career_detail]}" FontSize="12" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                </StackPanel>
-              </Button>
-              <TextBlock Text="{Binding S[saves.backup_note]}" Margin="0,8,0,0" FontSize="11" TextWrapping="Wrap"
-                         Foreground="{StaticResource InfinityFaint}" />
-            </StackPanel>
-            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="320">
-              <ItemsControl ItemsSource="{Binding SaveChoices}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Button Margin="0,5" Padding="20,14" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                            Click="OnPickSave" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
-                      <StackPanel>
-                        <TextBlock Text="{Binding Title}" FontWeight="Bold" />
-                        <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="{StaticResource InfinityMuted}" />
-                      </StackPanel>
-                    </Button>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
-          </DockPanel>
         </Grid>
       </DockPanel>
     </Grid>

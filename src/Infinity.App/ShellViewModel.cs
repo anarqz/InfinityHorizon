@@ -77,10 +77,10 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public bool ShowHero => ShowWelcome || ShowHome;
 
-    public bool ShowBugReport => SignedIn && _onBugReport && !ShowPickSave;
+    public bool ShowBugReport => SignedIn && _onBugReport;
 
     /// <summary>OD-118: an online-only area (the account page, bug reports) opened on the offline path says so, centered.</summary>
-    public bool ShowOfflinePane => OfflineMode && (_onAccount || _onBugReport || _onOfflineStatus) && !ShowPickSave;
+    public bool ShowOfflinePane => OfflineMode && (_onAccount || _onBugReport || _onOfflineStatus);
 
     /// <summary>
     /// OD-118 "Play offline": the launcher without an account. The one game this launcher serves is chosen for the player (no server
@@ -228,7 +228,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             _newName = value;
             Changed();
             Changed(nameof(ShowAzimuthNameWarning));
-            Changed(nameof(AzimuthNameWarning));
         }
     }
 
@@ -258,7 +257,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     private bool _onProfiles;
 
     /// <summary>No other page is open over PLAY or Profiles.</summary>
-    private bool NoOtherPage => InShell && !ShowPickSave && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
+    private bool NoOtherPage => InShell && !_onMods && !_onSetup && !_onBugReport && !_onAccount && !_onNews && !ShowCrashReport;
 
     /// <summary>The Profiles page is shown (owner 2026-11-08; it replaced the profile picker step).</summary>
     public bool ShowProfiles => _onProfiles && NoOtherPage;
@@ -349,10 +348,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             await CreateAccountFromLocalAsync(_pending, _firstLocal);
             return;
         }
-        // Owner 2026-10-27: the new account's first profile starts from the Azimuth career too, as a Noob profile made on the
-        // profile screen: named as Azimuth's player it adopts that career, otherwise the picker offers this PC's Azimuth saves.
-        var adoptsAzimuth = ShowAzimuthNameWarning;
-        Profile? created = null;
+        // OD-239: the first profile is an Azimuth one, which plays Azimuth's own save (the hook's redirect); nothing is copied
         await Run(S["busy.creating_account"], async () =>
         {
             var session = await _pending.CreateAccountAsync("fh2", NewName);
@@ -360,13 +356,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
             NewName = string.Empty;
             try { await EnterAsync(session); }
             catch { session.Dispose(); throw; }
-            created = session.Me?.Profiles.FirstOrDefault(p => p.Game == "fh2");
         });
-        if (created is { Mode: not "hardcore" } first) // B2: a Hardcore career starts empty
-        {
-            if (adoptsAzimuth && await AdoptAzimuthCareerAsync(first)) return;
-            OfferSaves(first);
-        }
     }
 
     /// <summary>The local profile a new account starts with (OD-120: POST /accounts registers it), null when none is on this PC.</summary>
@@ -468,8 +458,6 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         ClearIntegrity();
         ClearCrashScreen();
         _pending = null;
-        _saveTarget = null;
-        SaveChoices.Clear();
         CloseCareerRestore(); // OD-133
         Games.Clear();
         Profiles.Clear();
@@ -636,7 +624,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>The board's flags of the current game (or of the Profiles row's game being read, <see cref="InGame"/>): this PC's files and the server's switches.</summary>
-    private BoardFlags BoardFlagsNow(Me board) => new(ServerAllowsSeedFromProfile, HardcoreKeepsCloud, SeedPendingXuids(board));
+    private BoardFlags BoardFlagsNow(Me board) => new(ServerAllowsSeedFromProfile, SeedPendingXuids(board));
 
     private void ChangedProfileList()
     {

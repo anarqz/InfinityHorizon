@@ -27,7 +27,7 @@ public sealed partial class ShellViewModel
     }
     partial void InspectLobbyProfile(ref Profile? profile);
 
-    public bool ShowAccount => SignedIn && _onAccount && !ShowPickSave;
+    public bool ShowAccount => SignedIn && _onAccount;
     public bool HasDeletionPending => AccountDeletion is not null;
     public bool CanRequestDeletion => CanChangeIdentity && !HasDeletionPending &&
         !string.IsNullOrWhiteSpace(DeletionEmail) &&

@@ -31,8 +31,8 @@ public sealed class ApiProfileAccount(ApiClient api, string? game = null) : IPro
 public sealed record ProfileUpsertPlan(string AccountId, IReadOnlyList<LocalProfile> Account, IReadOnlyList<LocalProfile> Uploadable, int Room)
 {
     /// <summary>
-    /// Local profiles this refresh linked to the account (an upload the server stored whose answer was lost): registered now, so
-    /// their saves are continued like any registration's (<see cref="ProfileUpsert.ContinueOfflineSave"/>).
+    /// Local profiles this refresh linked to the account (an upload the server stored whose answer was lost): registered now, and
+    /// reported like any registration.
     /// </summary>
     public IReadOnlyList<LocalProfile> Recovered { get; init; } = [];
 
@@ -73,40 +73,6 @@ public static class ProfileUpsert
         var uploadable = all.Where(p => p.Game == game && p.LocalOnly).ToArray();
         var room = Math.Max(0, LocalProfileStore.MaxProfiles - me.Profiles.Count(p => p.Game == game));
         return new(me.AccountId, account, uploadable, room) { Recovered = account.Where(p => localOnly.Contains(p.Id)).ToArray() };
-    }
-
-    /// <summary>What <see cref="ContinueOfflineSave"/> did with a registered profile's local save.</summary>
-    public enum SaveContinuation
-    {
-        /// <summary>Nothing to do: Hardcore (online starts from the server's seed, OD-60; its local progress stays offline), or no local save.</summary>
-        None,
-
-        /// <summary>The newest sealed local revision now continues in the account XUID's folder (P1b, OD-41 clone with backups).</summary>
-        Continued,
-
-        /// <summary>The clone failed; the local save is untouched and stays on this PC.</summary>
-        Kept,
-    }
-
-    /// <summary>
-    /// P1b, after a registration: a Noob profile's newest sealed revision in its own offline folder is cloned into the account XUID's
-    /// folder (what that folder held is backed up first) and recorded in <see cref="SaveLinks"/>, so its offline progress continues
-    /// online. A Hardcore profile's local save is never cloned or uploaded (OD-60, OD-120).
-    /// </summary>
-    public static SaveContinuation ContinueOfflineSave(string savesRoot, string stateDirectory, LocalProfile profile, DateTime nowUtc)
-    {
-        ArgumentNullException.ThrowIfNull(profile);
-        if (profile.Hardcore || profile.Cloud is not { } cloud
-            || !ulong.TryParse(cloud.Xuid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var xuid)) return SaveContinuation.None;
-        try
-        {
-            var source = AzimuthSaves.List(savesRoot).FirstOrDefault(s => s.Xuid == profile.OfflineXuid);
-            if (source is null) return SaveContinuation.None;
-            var result = AzimuthSaves.Clone(savesRoot, source, xuid, nowUtc);
-            new SaveLinks(stateDirectory, profile.Game).Set(cloud.Xuid, new SaveLink(source.Folder, source.Revision.Number, result.Number, nowUtc));
-            return SaveContinuation.Continued;
-        }
-        catch (Exception error) when (error is SaveException or IOException or UnauthorizedAccessException) { return SaveContinuation.Kept; }
     }
 
     /// <summary>

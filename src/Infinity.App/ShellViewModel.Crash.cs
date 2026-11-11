@@ -20,7 +20,7 @@ public sealed partial class ShellViewModel
     private CrashIncidentStore CrashStore => new(_stateDirectory);
 
     public bool HasCrashReport => _crash is not null && InShell;
-    public bool ShowCrashReport => HasCrashReport && _crashOpen && !_onMods && !_onSetup && !_onAccount && !_onBugReport && !ShowPickSave;
+    public bool ShowCrashReport => HasCrashReport && _crashOpen && !_onMods && !_onSetup && !_onAccount && !_onBugReport;
     public bool CrashConsent { get => _crashConsent; set { _crashConsent = value; Changed(string.Empty); } }
     public bool CrashManualDumpConsent { get => _crashManualDumpConsent; set { _crashManualDumpConsent = value; Changed(string.Empty); } }
     public bool CanConsentCrash => CrashIdle && !_crashSent;
