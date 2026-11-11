@@ -119,6 +119,7 @@ public sealed partial class ShellViewModel
         environment.Add((Launch.EnvLauncherExe, Environment.ProcessPath ?? "infinity.exe"));
         environment.Add((EnvOfflineXuid, profile.OfflinePlayXuid.ToString(CultureInfo.InvariantCulture)));
         environment.Add((EnvOfflineGamertag, profile.Name));
+        environment.Add((Launch.EnvOfflineMode, profile.Mode)); // OD-239: an Azimuth profile plays Azimuth's own save offline too
         if (WineHost.Detected)
         {
             var inherited = Environment.GetEnvironmentVariable("WINEDLLOVERRIDES");
@@ -185,7 +186,7 @@ public sealed partial class ShellViewModel
             Log("play: offline as local profile " + profile.Id + " (" + AzimuthSaves.FolderFor(profile.OfflinePlayXuid) + ")");
             // Only this launcher names an overlay: one inherited from the player's own environment never reaches the game.
             if (WineHost.Detected) Log("play: wine " + WineHost.HookModule + " " + WineHost.EnsureNativeDllOverride(WineHost.HookModule, true));
-            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [AzimuthSetup.SkipLauncher], install.Root, environment, OfflineOverlayNames));
+            using var child = GameProcess.Spawn(new LaunchPlan(install.HostExe, [AzimuthSetup.SkipLauncher], install.Root, environment, [.. OfflineOverlayNames, .. Launch.OfflineIdentityNames]));
             using var overlay = uiPipe is null ? null : new OverlayChannel(uiPipe, child.Pid,
                 new UiFrame.Status(profile.DisplayName, UiTier.Free, UiState.Offline, S["offline.playing_offline_status"]));
             if (overlay is not null)
@@ -210,7 +211,8 @@ public sealed partial class ShellViewModel
             Log("play: offline game ended (code " + code.ToString(CultureInfo.InvariantCulture) + "); back to the launcher, nothing synced");
             // B1: the hook refuses to play a launcher profile on Azimuth's own save; any other code ended the session unexpectedly
             SetStatus(code == 0 || code == ExitDisposition.QuitForcedExit ? S["status.ended"]
-                : code == ExitDisposition.IdentityRefusedExit ? S["supervisor.identity_refused"] : S["mods.runtime_failed"]);
+                : code == ExitDisposition.IdentityRefusedExit ? S["supervisor.identity_refused"]
+                : code == ExitDisposition.AzimuthSaveRefusedExit ? S["supervisor.azimuth_save_refused"] : S["mods.runtime_failed"]);
         }
         catch (Exception error) when (ManagedModFiles.IsStateError(error) || error is System.ComponentModel.Win32Exception)
         { Message = ModLaunchFailed("offline session", error); }

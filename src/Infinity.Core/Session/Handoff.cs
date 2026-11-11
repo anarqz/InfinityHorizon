@@ -23,6 +23,16 @@ public static class Launch
     /// <summary>The profile's own offline identity (OD-118 Play offline; B1: also an online start's fallback): XUID in decimal, play name.</summary>
     public const string EnvOfflineXuid = "FI_OFFLINE_XUID", EnvOfflineGamertag = "FI_OFFLINE_GAMERTAG";
 
+    /// <summary>
+    /// OD-239 (T-1111-AZIMUTH): the profile's mode (<c>noob</c> or <c>hardcore</c>), named with every offline identity. An Azimuth
+    /// (<c>noob</c>) profile plays Azimuth's own <c>User_9000000000000</c> offline too (hook account.c, the same save rows as an online
+    /// Azimuth session); the hook refuses an identity without it.
+    /// </summary>
+    public const string EnvOfflineMode = "FI_OFFLINE_MODE";
+
+    /// <summary>Every offline-identity name: never inherited (a shell, Steam launch options); only the launcher names them.</summary>
+    public static IReadOnlyList<string> OfflineIdentityNames { get; } = [EnvOfflineXuid, EnvOfflineGamertag, EnvOfflineMode];
+
     public const ushort ProtocolVersion = 1;
 
     public const string PipePrefix = @"\\.\pipe\ForzaInfinity-";

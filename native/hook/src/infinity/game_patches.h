@@ -31,12 +31,12 @@ static int game_patch_apply(unsigned char *at, const FiGamePatch *patch) {
    name at profile load: the selected game's Azimuth save rows, all or nothing over their exact original bytes. A Hardcore
    session (`azimuth` 0) writes nothing and logs nothing. On a refusal the game opens the container its identity names, and the
    launcher is told (Event 6 "1|launch.azimuth_save_refused"), so the player sees it. */
-void fi_game_azimuth_save(int azimuth) {
+int fi_game_azimuth_save(int azimuth) {
     const FiGameProfile *game = fi_game_profile();
     const FiGamePatch *rows = 0;
     unsigned count = fi_game_azimuth_save_rows(game, azimuth, &rows), failed = 0;
     if (!azimuth) {
-        return;
+        return 0;
     }
     unsigned char *image = fi_game_selected_image;
     if (!count) {
@@ -50,11 +50,13 @@ void fi_game_azimuth_save(int azimuth) {
         log_append(rows[result > 0 ? 0 : failed].what);
         log_append(".\r\n");
         if (result > 0) {
-            return;
+            return 1;
         }
     }
-    /* never only the log: the launcher shows the player an overlay toast (HookEvents.NoticeToast fills in the folder) */
+    /* never only the log: the launcher shows the player an overlay toast (HookEvents.NoticeToast fills in the folder); an
+       offline start has no launcher pipe, so account.c ends it instead (ACCOUNT_EXIT_AZIMUTH_SAVE) */
     fi_launch_notice(FI_NOTICE_WARNING, "launch.azimuth_save_refused");
+    return -1;
 }
 
 /* "<label> 0x<16 hex digits>" and a line break. */

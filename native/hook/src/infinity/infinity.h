@@ -78,9 +78,10 @@ int fi_game_ready(unsigned *generation);
 /* OD-206 W9: a polled game's readiness (game_patches.h), published as the detoured one is: `first` and
    `second` are the identity whose change starts a new generation. */
 void fi_game_ready_polled(int ready, void *first, void *second);
-/* OD-239 8 (game_patches.h): an Azimuth session's (`azimuth`, the ticket's mode noob) save rows, before the game reads its
-   identity; nothing for Hardcore. */
-void fi_game_azimuth_save(int azimuth);
+/* OD-239 8 (game_patches.h): an Azimuth session's (`azimuth`: the ticket's mode noob online, FI_OFFLINE_MODE=noob offline)
+   save rows, before the game reads its identity; nothing for Hardcore. 1 applied, 0 Hardcore (nothing to do), -1 refused
+   (nothing written, logged, Event 6 queued). */
+int fi_game_azimuth_save(int azimuth);
 /* race_conn.c (T38b): the lobby's race connectivity (0 Undefined, 1 Online), read only. check: the
    build's bytes as expected; apply (from fi_game_ready_apply); read: the value, 0 when unreadable;
    tick (the main update's sample): a change is one bounded line; teardown: the value at the

@@ -507,6 +507,35 @@ static void account_refuse(const char *why) {
     ExitProcess(ACCOUNT_EXIT_IDENTITY);
 }
 
+/* OD-239 (T-1111-AZIMUTH): the launcher names the profile's mode with every offline identity (FI_OFFLINE_MODE, `noob` or
+   `hardcore`). An Azimuth (noob) profile plays Azimuth's own save container offline too, through the same rows as an online
+   Azimuth session (game_patches.h fi_game_azimuth_save, all or nothing); Hardcore writes nothing. This start has no launcher
+   pipe for a notice, so a refusal ends the game before it reads a save, with this exit code, which the launcher explains
+   (LaunchPlan.cs ExitDisposition.AzimuthSaveRefused). */
+#define ACCOUNT_EXIT_AZIMUTH_SAVE 0x46490006u
+
+/* FI_OFFLINE_MODE: 1 noob, 0 hardcore, -1 absent or anything else (the identity is then not valid). */
+static int account_offline_mode(void) {
+    wchar_t mode[16];
+    char ascii[16];
+    DWORD n = GetEnvironmentVariableW(L"FI_OFFLINE_MODE", mode, ARRAY_COUNT(mode));
+    if (!n || n >= ARRAY_COUNT(mode)) {
+        return -1;
+    }
+    wide_to_ascii(mode, ascii, sizeof(ascii));
+    return text_equal_ignore_case(ascii, "noob") ? 1 : text_equal_ignore_case(ascii, "hardcore") ? 0 : -1;
+}
+
+/* Before the game reads the offline identity: an Azimuth profile's save rows, or the game ends. */
+static void account_offline_azimuth_save(int azimuth) {
+    if (fi_game_azimuth_save(azimuth) < 0) {
+        log_append("ACCOUNT: REFUSED: an Azimuth profile's offline start could not open Azimuth's own save; the game is closed "
+                   "before it reads a save.\r\n");
+        TerminateProcess(GetCurrentProcess(), ACCOUNT_EXIT_AZIMUTH_SAVE);
+        ExitProcess(ACCOUNT_EXIT_AZIMUTH_SAVE);
+    }
+}
+
 /* B1: the profile's own offline identity (FI_OFFLINE_XUID / FI_OFFLINE_GAMERTAG, offline_identity.c),
    which the launcher also names on an online start: when the online identity was not set (ticket
    refused, handshake late or lost), the game plays offline on the profile's own save. 1 when set. */
@@ -515,9 +544,11 @@ static int account_fallback_identity(void) {
     DWORD nx = GetEnvironmentVariableW(L"FI_OFFLINE_XUID", xuid, ARRAY_COUNT(xuid));
     DWORD nt = GetEnvironmentVariableW(L"FI_OFFLINE_GAMERTAG", tag, ARRAY_COUNT(tag));
     unsigned long long value = 0;
-    if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value)) {
+    int azimuth = account_offline_mode();
+    if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value) || azimuth < 0) {
         return 0;
     }
+    account_offline_azimuth_save(azimuth); /* OD-239: the game has not read its identity yet (this getter has not returned) */
     memory_copy(account_xuid, xuid, (wide_len(xuid) + 1) * sizeof(wchar_t));
     memory_copy(account_gamertag, tag, (wide_len(tag) + 1) * sizeof(wchar_t));
     account_active = 1;
@@ -870,9 +901,12 @@ static int account_apply_offline(void) {
         return 0;
     }
     /* B1: the launcher named a profile; its save is never swapped for Azimuth's own */
-    if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value)) {
+    int azimuth = account_offline_mode();
+    if (!nx || nx >= ARRAY_COUNT(xuid) || !nt || nt >= ARRAY_COUNT(tag) || !fi_offline_identity(xuid, tag, &value) || azimuth < 0) {
         account_refuse("the launcher's offline profile is not valid");
     }
+    /* OD-239: runtime start (fi_runtime_initialize, after the image was handed over), before the getters exist */
+    account_offline_azimuth_save(azimuth);
     account_host = (unsigned char *)GetModuleHandleW(NULL);
     account_offsets = azimuth_offsets(account_host);
     if (!account_offsets) {

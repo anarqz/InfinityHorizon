@@ -82,9 +82,9 @@ public static class HookEvents
         var level = (byte)(detail[0] - '0');
         var text = detail[2..].Trim();
         if(text=="connection.direct_failed")text=strings?[text] ?? "The direct connection could not be established. Try again or check Connection details.";
-        // OD122-L4: the hook refused the start (it plays offline on the profile's own save, never Azimuth's)
-        if (text == "launch.ticket_refused") text = strings?[text] ?? "Online is off for this session: the game did not accept the launcher's session ticket. You play offline on this profile's own save; Azimuth's own save is untouched.";
-        if (text == "launch.late") text = strings?[text] ?? "Online is off for this session: the game started before the launcher's session reached it. You play offline on this profile's own save; Azimuth's own save is untouched.";
+        // OD122-L4: the hook refused the start: it plays offline on the profile's offline identity (OD-239: an Azimuth one on Azimuth's save)
+        if (text == "launch.ticket_refused") text = strings?[text] ?? "Online is off for this session: the game did not accept the launcher's session ticket. You play offline: an Azimuth profile on your Azimuth save, a Hardcore profile on its own save on this PC.";
+        if (text == "launch.late") text = strings?[text] ?? "Online is off for this session: the game started before the launcher's session reached it. You play offline: an Azimuth profile on your Azimuth save, a Hardcore profile on its own save on this PC.";
         // OD-239 8 (T-1111-AZIMUTH): the hook could not point an Azimuth session at Azimuth's save (game_patches.h
         // fi_game_azimuth_save): the game saves to the profile's own folder this time, and the player is told so
         if (text == "launch.azimuth_save_refused")

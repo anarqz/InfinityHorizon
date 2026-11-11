@@ -1,7 +1,8 @@
 /* OD-118 (P1): the identity of the launcher's Play offline (FI_LAUNCH=v1;offline). The launcher
    passes the chosen local profile as FI_OFFLINE_XUID (decimal) and FI_OFFLINE_GAMERTAG; account.c
-   answers the game's LocalUser getters with them, so the game saves in User_<hex xuid> and each
-   local profile keeps its own save. Accepted XUIDs: the local offline range (CR-L36,
+   answers the game's LocalUser getters with them, so a Hardcore profile saves in User_<hex xuid>; with
+   FI_OFFLINE_MODE=noob (OD-239) account.c also applies the Azimuth save rows, so an Azimuth profile plays
+   User_9000000000000 under its own name. Accepted XUIDs: the local offline range (CR-L36,
    0x9000000000001-0x90000000000FF, never issued by the server), or a server-issued XUID (at or
    above BETA_FLOOR) that a Noob profile continues offline. Nothing here goes online. */
 #include "infinity.h"
