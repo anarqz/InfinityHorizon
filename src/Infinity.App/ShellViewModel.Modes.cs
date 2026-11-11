@@ -29,11 +29,14 @@ public sealed partial class ShellViewModel
         get { var can = _session?.Me is not null && CurrentGame.FullFeatures && CurrentGame.HardcoreCareers && !HasLiveProfile("hardcore"); InspectCanChooseHardcore(ref can); return can; }
     }
 
-    /// <summary>OD-214 / CAREERS.md §2: a new Azimuth profile only while the account has no live one (it gets a career of this game instead).</summary>
+    /// <summary>OD-214 / OD-240: the Azimuth identity's gamertag is picked only while the account has none (one identity per account).</summary>
     public bool CanChooseNoob => !HasLiveProfile("noob");
 
-    /// <summary>The new-profile form: offline always; signed in only while a mode has no live profile the game allows.</summary>
-    public bool ShowNewProfile => OfflineMode || _session?.Me?.Players is null || CanChooseNoob || CanChooseHardcore;
+    /// <summary>
+    /// The plain list's form (offline, or a server before CR-S98). OD-240: offline it only names this PC's Azimuth identity, while there is
+    /// none; signed in, while a mode has no live profile the game allows.
+    /// </summary>
+    public bool ShowNewProfile => OfflineMode ? AzimuthRow() is null : CanChooseNoob || CanChooseHardcore;
 
     /// <summary>A CR-S98 server lists a live profile of <paramref name="mode"/> on this account (<c>players</c>).</summary>
     private bool HasLiveProfile(string mode) =>

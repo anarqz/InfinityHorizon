@@ -70,6 +70,33 @@ public static class LaunchModeStore
 
     private const string LastGameName = "last-game";
 
+    /// <summary>
+    /// OD-240: the XUID of the account's Azimuth identity at the last sign-in (decimal), so offline plays under the same gamertag
+    /// (<see cref="AzimuthIdentity.Local"/>); null when none was kept.
+    /// </summary>
+    public static string? ReadAzimuthXuid(string stateDirectory)
+    {
+        try
+        {
+            var path = Path.Combine(stateDirectory, AzimuthXuidName);
+            if (!File.Exists(path) || new FileInfo(path).Length > 32) return null;
+            var xuid = File.ReadAllText(path).Trim();
+            return xuid.Length > 0 && xuid.All(char.IsAsciiDigit) ? xuid : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public static void WriteAzimuthXuid(string stateDirectory, string xuid)
+    {
+        if (xuid.Length == 0 || !xuid.All(char.IsAsciiDigit)) throw new ArgumentException("not a XUID", nameof(xuid));
+        Directory.CreateDirectory(stateDirectory);
+        var path = Path.Combine(stateDirectory, AzimuthXuidName);
+        File.WriteAllText(path + ".tmp", xuid);
+        File.Move(path + ".tmp", path, overwrite: true);
+    }
+
+    private const string AzimuthXuidName = "azimuth-identity";
+
     public static void Write(string stateDirectory, string mode)
     {
         if (mode is not (Online or Offline)) throw new ArgumentOutOfRangeException(nameof(mode));

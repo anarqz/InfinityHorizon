@@ -72,7 +72,7 @@ public sealed partial class ShellViewModel
         catch (IOException) { Message = S["offline.profile_save_failed"]; return; }
         NewName = string.Empty;
         NewSeedFromProfile = false;
-        Message = S.Format("offline.profile_created", ("name", created.Name));
+        Message = S.Format(hardcore ? "offline.profile_created" : "profiles.azimuth_identity_made", ("name", created.Name));
         if (_session is { } session && SignedIn)
         {
             await Run(S.Format("busy.creating_profile", ("mode", BusyMode(hardcore ? "hardcore" : "noob"))), async () =>
@@ -83,7 +83,7 @@ public sealed partial class ShellViewModel
                 var result = (await ProfileUpsert.UploadAsync(api, access, LocalProfiles, plan, [created.Id], CancellationToken.None)).SingleOrDefault();
                 await session.RefreshMeAsync();
                 Message = result is { Uploaded: false, ErrorCode: { } code } ? ProfileErrorText(code)
-                    : S.Format(hardcore ? "modes.created_hardcore" : "profiles.created", ("name", result?.Profile.DisplayName ?? created.Name));
+                    : S.Format(hardcore ? "modes.created_hardcore" : "profiles.azimuth_identity_made", ("name", result?.Profile.DisplayName ?? created.Name));
                 // OD-120: a name taken meanwhile (or no room) opens the panel, which asks for a new name or keeps it on this PC.
                 if (result is { Uploaded: false }) await OfferProfileUpsertAsync();
                 // CR-S52: the profile exists on the server now: the dry run of the chosen source, shown before anything is copied

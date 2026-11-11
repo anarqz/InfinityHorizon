@@ -35,24 +35,21 @@ public sealed partial class ShellViewModel
         : !DeleteSpeaksCareers ? S.Format("profiles.delete_title", ("name", DeleteProfileName))
         : S.Format(_deleteAllGames ? "profiles.delete_all_title" : "profiles.delete_career_title", ("name", DeleteProfileName), ("game", DeleteGameLabel));
 
-    /// <summary>OD-239: an AZIMUTH (wire <c>noob</c>) profile or career: no cloud save of its own, and it plays Azimuth's own save.</summary>
-    private bool DeletingAzimuth => _deleting is { Mode: not "hardcore" };
-
     public string DeleteProfileBody => _deleting is null ? string.Empty
         : !DeleteSpeaksCareers ? S.Format("profiles.delete_body", ("name", DeleteProfileName))
-        : _deleteAllGames ? S.Format(DeletingAzimuth ? "profiles.delete_all_body_azimuth" : "profiles.delete_all_body", ("name", DeleteProfileName))
-        : S.Format(DeletingAzimuth ? "profiles.delete_career_body_azimuth" : "profiles.delete_career_body", ("name", DeleteProfileName), ("game", DeleteGameLabel)) + " "
+        : _deleteAllGames ? S.Format("profiles.delete_all_body", ("name", DeleteProfileName))
+        : S.Format("profiles.delete_career_body", ("name", DeleteProfileName), ("game", DeleteGameLabel)) + " "
             + S.Format(_session?.Me is { } me && ProfileDeletion.IsLastCareer(me, _deleting.Xuid, _deleting.Game) ? "profiles.delete_career_last" : "profiles.delete_career_keeps",
                 ("name", DeleteProfileName));
 
     /// <summary>
     /// What stays, as the code does it (<see cref="ProfileDeletion.CleanUp"/>, <see cref="ArchiveDeletedCareer"/>): the profile's own folders
-    /// on this PC (its XUID's and its local entry's offline one) move to <c>fi-launcher-archive</c>, a copy in the launcher's history; an
-    /// AZIMUTH profile's deletion never touches Azimuth's own save, which it says by name.
+    /// on this PC (its XUID's and its local entry's offline one) move to <c>fi-launcher-archive</c>, a copy in the launcher's history; this PC's
+    /// Azimuth save (<c>User_9000000000000</c>) is never touched, which it says by name. OD-240: only a HARDCORE profile or career is deleted
+    /// here (AZIMUTH is one identity with nothing to delete).
     /// </summary>
     public string DeleteProfileKeeps => _deleting is null ? string.Empty
-        : S.Format(DeletingAzimuth ? "profiles.delete_keeps_azimuth" : "profiles.delete_keeps", ("name", DeleteProfileName), ("folders", DeleteLocalFolders()),
-            ("azimuth", AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)));
+        : S.Format("profiles.delete_keeps", ("name", DeleteProfileName), ("folders", DeleteLocalFolders()), ("azimuth", AzimuthSaves.FolderFor(AzimuthSaves.OfflineXuid)));
 
     private (Profile Profile, string Text)? _deleteFolders;
 
@@ -102,11 +99,14 @@ public sealed partial class ShellViewModel
     /// <summary>The rows' "Delete from the cloud" links are enabled (never while playing or busy).</summary>
     public bool CanAskDeleteProfile => Idle && !Playing && _session?.Me is not null && !OfflineMode;
 
-    /// <summary>A row's "Delete from the cloud": an account profile only (a local-only row has nothing in the cloud), never while playing.</summary>
+    /// <summary>
+    /// A row's "Delete from the cloud": an account HARDCORE profile only (a local-only row has nothing in the cloud; OD-240: the AZIMUTH
+    /// identity is never deleted from the launcher), never while playing.
+    /// </summary>
     public void AskDeleteProfile(Profile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        if (_session?.Me is not { } me || OfflineMode || Playing || _busy
+        if (_session?.Me is not { } me || OfflineMode || Playing || _busy || profile.Mode != "hardcore"
             || !me.Profiles.Any(p => p.ProfileId == profile.ProfileId && p.Xuid == profile.Xuid))
         {
             return;
@@ -222,14 +222,12 @@ public sealed partial class ShellViewModel
                 return all;
             });
             var name = ProfileName.Plain(profile.Gamertag);
-            var azimuthProfile = profile.Mode != "hardcore";
             CancelDeleteProfile();
             if (rows.Any(r => r.ProfileId == _gate.ProfileKey)) Gate = _gate with { ProfileTag = null, ProfileKey = null }; // pick another profile
             if (_chosenLocal is { } chosen && rows.Any(r => r.ProfileId == chosen.Cloud?.ProfileId)) _chosenLocal = null;
             try { await session.RefreshMeAsync(); }
             finally { FillProfiles(); }
-            Message = S.Format(azimuthProfile ? fullyArchived ? "profiles.deleted_azimuth" : "profiles.deleted_not_archived_azimuth"
-                : fullyArchived ? "profiles.deleted" : "profiles.deleted_not_archived", ("name", name));
+            Message = S.Format(fullyArchived ? "profiles.deleted" : "profiles.deleted_not_archived", ("name", name));
         });
     }
 
