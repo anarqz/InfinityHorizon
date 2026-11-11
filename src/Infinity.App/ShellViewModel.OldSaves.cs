@@ -26,6 +26,8 @@ public sealed record OldSaveRow(OldSave Save, string Title, string Line)
 public sealed partial class ShellViewModel
 {
     private IReadOnlyList<OldSave> _oldLocal = [];
+    /// <summary>OD-239 BUG A: the HARDCORE XUIDs of the last scan (<see cref="OldSaves.HardcoreXuids"/>): never a row, a prompt or a move.</summary>
+    private IReadOnlySet<ulong> _oldHardcore = new HashSet<ulong>();
     private bool _oldSavePrompt;
     private string? _oldSavePromptCheckedFor;
     private string? _oldSaveResult;
@@ -43,8 +45,18 @@ public sealed partial class ShellViewModel
     public bool ShowOldSavePrompt => _oldSavePrompt && InShell;
 
     public string OldSavePromptText => OldSaveRows.Select(r => r.Save).OrderByDescending(s => s.SavedAtUtc ?? DateTime.MinValue).FirstOrDefault() is { } newest
-        ? S.Format("oldsave.prompt_body", ("name", newest.Gamertag), ("game", GameName(newest.Game)))
+        ? S.Format("oldsave.prompt_body", ("mode", S["sm.noob"]), ("name", newest.Gamertag), ("game", GameName(newest.Game)), ("source", OldSourceText(newest)))
         : string.Empty;
+
+    /// <summary>Where an old save is, in the player's words (its folder on this PC, or its old Noob cloud save).</summary>
+    private string OldSourceText(OldSave save) => save.Source == OldSaveSource.Cloud
+        ? S["oldsave.source_cloud"]
+        : S.Format("oldsave.source_pc", ("folder", AzimuthSaves.FolderFor(save.Xuid)));
+
+    /// <summary>The AZIMUTH profile's old save of <paramref name="xuid"/> in <paramref name="game"/> (this PC's first, then the cloud's), or null.</summary>
+    private OldSaveRow? OldSaveRowOf(string xuid, string game) =>
+        OldSaveRows.Where(r => r.Save.Game == game && r.Save.Xuid.ToString(CultureInfo.InvariantCulture) == xuid)
+            .OrderBy(r => r.Save.Source == OldSaveSource.ThisPc ? 0 : 1).FirstOrDefault();
 
     /// <summary>The account the prompt's "Dismiss" is kept for: the signed-in account, or this PC without one.</summary>
     private string OldSaveAccount => _session?.Me?.AccountId ?? "this-pc";
@@ -54,7 +66,7 @@ public sealed partial class ShellViewModel
     {
         if (_install is not { } install) return [];
         var games = GameDefinition.Available(install.Root).Select(g => g.Id).ToHashSet(StringComparer.Ordinal);
-        return [.. OldSaves.InTheCloud(OldNoobLines).Where(s => games.Contains(s.Game))];
+        return [.. OldSaves.InTheCloud(OldNoobLines, _oldHardcore).Where(s => games.Contains(s.Game))];
     }
 
     /// <summary>The rows from the last scan of this PC and the cached <c>/me</c> (no file read, no request): every /me and game change.</summary>
@@ -62,7 +74,7 @@ public sealed partial class ShellViewModel
     {
         var c = CultureInfo.CurrentCulture;
         var rows = _oldLocal.Concat(OldCloudSaves()).Select(s => new OldSaveRow(s,
-            S.Format("oldsave.row_title", ("name", s.Gamertag), ("game", GameName(s.Game))),
+            S.Format("oldsave.row_title", ("mode", S["sm.noob"]), ("name", s.Gamertag), ("game", GameName(s.Game))),
             s.Source == OldSaveSource.Cloud
                 ? S.Format("oldsave.row_cloud", ("rev", s.Line!.Revision.ToString(c)), ("when", s.SavedAtUtc is { } w ? When(w) : S["sm.unknown"]))
                 : S.Format("oldsave.row_pc", ("folder", s.Local!.Folder), ("when", s.SavedAtUtc is { } p ? When(p) : S["sm.unknown"])))).ToList();
@@ -85,7 +97,9 @@ public sealed partial class ShellViewModel
         IReadOnlyList<LocalProfile> locals;
         try { locals = LocalProfiles.Read(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { locals = []; }
-        var owners = OldSaves.Owners(OfflineMode ? null : _session?.Me, locals);
+        // OD-239 BUG A: sources by MODE only; every XUID a HARDCORE profile has (the cached /me too, offline) is never one
+        var hardcore = OldSaves.HardcoreXuids(_session?.Me, locals);
+        var owners = OldSaves.Owners(OfflineMode ? null : _session?.Me, locals, hardcore);
         var games = GameDefinition.Available(install.Root);
         var (local, azimuth) = await Task.Run(() =>
         {
@@ -94,20 +108,21 @@ public sealed partial class ShellViewModel
             foreach (var game in games)
             {
                 var root = AzimuthSaves.SavesRoot(install.Root, game);
-                found.AddRange(OldSaves.OnThisPc(game.Id, root, owners));
+                found.AddRange(OldSaves.OnThisPc(game.Id, root, owners, hardcore));
                 newest[game.Id] = OldSaves.AzimuthNewest(root);
             }
             return ((IReadOnlyList<OldSave>)found, newest);
         });
         if (scan != _oldSaveScan) return; // a newer scan answers
         _oldLocal = local;
+        _oldHardcore = hardcore;
         FillOldSaveRows();
         if (!prompt || _oldSavePromptCheckedFor == account) return;
         _oldSavePromptCheckedFor = account;
         var all = local.Concat(OldCloudSaves()).ToList();
         var dismissed = await Task.Run(() => new OldSavePromptStore(_stateDirectory).IsDismissed(account));
         _oldSavePrompt = !dismissed && OldSaves.AnyNewer(all, game => azimuth.GetValueOrDefault(game));
-        if (_oldSavePrompt) Log($"saves: an old Azimuth-profile save is newer than the Azimuth save ({all.Count} old saves); asking the player");
+        if (_oldSavePrompt) Log($"saves: an old AZIMUTH-profile save is newer than the Azimuth save ({string.Join(", ", all.Select(s => s.Key))}); asking the player");
         Changed(nameof(ShowOldSavePrompt));
         Changed(nameof(OldSavePromptText));
     }
@@ -150,7 +165,16 @@ public sealed partial class ShellViewModel
         if (MoveGameRunning()) { Message = S["saves.game_running"]; return; }
         var save = row.Save;
         var savesRoot = AzimuthSaves.SavesRoot(install.Root, game);
-        var mover = new OldSaveMove(savesRoot, new LocalHistory(_stateRoot, game, Version), MoveGameRunning);
+        // OD-239 BUG A: the HARDCORE XUIDs read again now (this PC's profiles and the cached /me) and refused before anything is read
+        IReadOnlyList<LocalProfile> locals;
+        try { locals = LocalProfiles.Read(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { locals = []; }
+        var hardcore = new HashSet<ulong>(OldSaves.HardcoreXuids(_session?.Me, locals));
+        hardcore.UnionWith(_oldHardcore);
+        var mover = new OldSaveMove(savesRoot, new LocalHistory(_stateRoot, game, Version), MoveGameRunning, hardcore);
+        var source = OldSourceText(save);
+        var profile = new HistoryProfile(save.Xuid.ToString(CultureInfo.InvariantCulture), save.Gamertag, "noob");
+        var reason = new HistoryReason(OldReason("en", save), OldReason("pt-BR", save));
         Uri? savesOrigin = null;
         if (save.Source == OldSaveSource.Cloud
             && (_session?.Info.Services?.Saves is not { } origin || !Uri.TryCreate(origin, UriKind.Absolute, out savesOrigin)))
@@ -165,7 +189,7 @@ public sealed partial class ShellViewModel
             {
                 if (save.Source == OldSaveSource.ThisPc)
                 {
-                    result = await Task.Run(() => mover.MoveFromThisPc(save.Xuid, path => Log("saves: Azimuth save backed up before the move: " + path)));
+                    result = await Task.Run(() => mover.MoveFromThisPc(save.Xuid, path => Log("saves: Azimuth save backed up before the move: " + path), profile, reason));
                 }
                 else
                 {
@@ -173,7 +197,7 @@ public sealed partial class ShellViewModel
                     var api = new SavesApiClient(Http, savesOrigin!, ClientHeader, session.CareerGame(game.Id), game.Saves.Bundle);
                     var access = await session.Tokens.AccessAsync(CancellationToken.None);
                     result = await Task.Run(() => mover.MoveFromCloudAsync(api, access, save.Line!, game.Saves.Bundle,
-                        path => Log("saves: Azimuth save backed up before the move: " + path)));
+                        path => Log("saves: Azimuth save backed up before the move: " + path), profile, reason));
                 }
             }
             catch (Exception e) when (e is HttpRequestException or TaskCanceledException or ApiException)
@@ -186,7 +210,8 @@ public sealed partial class ShellViewModel
             Log($"saves: old save {save.Key} → Azimuth {result.Outcome} r{result.Revision} {result.Code}");
             _oldSaveResult = result.Outcome switch
             {
-                OldSaveMoveOutcome.Moved => S.Format("oldsave.moved", ("game", GameName(game.Id)), ("backup", BackupText(result))),
+                OldSaveMoveOutcome.Moved => S.Format("oldsave.moved", ("mode", S["sm.noob"]), ("name", save.Gamertag), ("source", source), ("game", GameName(game.Id)), ("backup", BackupText(result))),
+                OldSaveMoveOutcome.NotAzimuth => S.Format("oldsave.not_azimuth", ("folder", AzimuthSaves.FolderFor(save.Xuid))),
                 OldSaveMoveOutcome.GameRunning when result.BackupPath is not null => S.Format("oldsave.stopped_running", ("backup", BackupText(result))),
                 OldSaveMoveOutcome.GameRunning => S["saves.game_running"],
                 OldSaveMoveOutcome.NoSave => S["oldsave.nothing"],
@@ -201,6 +226,14 @@ public sealed partial class ShellViewModel
         });
         await RefreshOldSavesAsync(prompt: false);
         FillSaveCards();
+    }
+
+    /// <summary>The history entry's reason in <paramref name="locale"/>: the real source (mode, profile, where it is).</summary>
+    private string OldReason(string locale, OldSave save)
+    {
+        var s = StringsIn(locale);
+        var where = save.Source == OldSaveSource.Cloud ? s["oldsave.source_cloud"] : s.Format("oldsave.source_pc", ("folder", AzimuthSaves.FolderFor(save.Xuid)));
+        return s.Format("oldsave.reason", ("mode", s["sm.noob"]), ("name", save.Gamertag), ("source", where));
     }
 
     /// <summary>
