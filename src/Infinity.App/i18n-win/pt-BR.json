@@ -1305,6 +1305,7 @@
   "sm.hint_azimuth": "Sem verificações, mods liberados · o save deste PC · do jeito livre",
   "sm.explain.az_title": "Do jeito livre",
   "sm.explain.az_body": "O AZIMUTH joga o seu próprio save do Azimuth neste PC: sem verificações na sua progressão, mods liberados, nada salvo na nuvem. Rankings, clubes e pinturas continuam mostrando o seu gamertag do Azimuth.",
+  "sm.row.level_synced": "{level} · sincronizado {ago}",
   "sm.row.fields": "Nv {level}  ·  CR {credits}  ·  {last}",
   "sm.row.cloud": "salvo na nuvem",
   "sm.row.local_when": "neste PC, alterado {when} · ainda não enviado",
