@@ -186,7 +186,7 @@ public static class LauncherLogCollector
 }
 
 /// <summary>Where the zip went: the host's real Desktop, found in this order.</summary>
-public enum DesktopSource { Windows, XdgUserDirs, HomeDesktop, PrefixDesktop }
+public enum DesktopSource { Windows, XdgDesktop, HomeDesktop, PrefixDesktop }
 
 public sealed record DesktopChoice(string Folder, DesktopSource Source);
 
@@ -203,7 +203,7 @@ public sealed class LogsHost
 {
     /// <summary>Running under Wine/Proton (<c>WineHost.Detected</c>).</summary>
     public required bool Wine { get; init; }
-    /// <summary>The environment Wine passes through (<c>HOME</c>).</summary>
+    /// <summary>The environment inside Wine (<c>WINEHOMEDIR</c>, then <c>HOME</c> when Proton passes it).</summary>
     public required Func<string, string?> Environment { get; init; }
     public required Func<string, bool> DirectoryExists { get; init; }
     /// <summary>A small text file's content, or null when it cannot be read.</summary>
@@ -223,26 +223,51 @@ public static class LogsHandoff
 {
     /// <summary>
     /// The host's real Desktop. Windows: <c>SpecialFolder.Desktop</c>. Under Wine/Proton the prefix's <c>drive_c\users\steamuser\Desktop</c>
-    /// is a plain folder the player never sees, so: (1) <c>XDG_DESKTOP_DIR</c> of <c>$HOME/.config/user-dirs.dirs</c>, (2) <c>$HOME/Desktop</c>,
-    /// both through Wine's <c>Z:</c> drive (the Linux root); only when neither exists (or HOME is missing) the prefix's Desktop.
+    /// is a plain folder the player never sees, and Proton does not pass <c>HOME</c> into the prefix (SAURON, azimuth7 run), so the host home
+    /// is <c>WINEHOMEDIR</c> (Wine's own, already in Windows form: <c>\??\Z:\home\u</c>, the <c>\??\</c> stripped), then <c>HOME</c> when present
+    /// (a Linux path through Wine's <c>Z:</c>). For each home: (1) <c>XDG_DESKTOP_DIR</c> of <c>&lt;home&gt;\.config\user-dirs.dirs</c>,
+    /// (2) <c>&lt;home&gt;\Desktop</c>; only when none exists, the prefix's Desktop.
     /// </summary>
     public static DesktopChoice Desktop(LogsHost host)
     {
         ArgumentNullException.ThrowIfNull(host);
         if (!host.Wine) return new(host.SpecialDesktop(), DesktopSource.Windows);
-        if (host.Environment("HOME") is { Length: > 1 } home && home.StartsWith('/'))
+        foreach (var home in Homes(host))
         {
-            home = home.TrimEnd('/');
-            if (host.ReadText(ToWine(home + "/.config/user-dirs.dirs")) is { } dirs && XdgDesktop(dirs, home) is { } xdg
-                && host.DirectoryExists(ToWine(xdg))) return new(ToWine(xdg), DesktopSource.XdgUserDirs);
-            if (host.DirectoryExists(ToWine(home + "/Desktop"))) return new(ToWine(home + "/Desktop"), DesktopSource.HomeDesktop);
+            if (host.ReadText(home.Windows + @"\.config\user-dirs.dirs") is { } dirs && XdgDesktop(dirs, home) is { } xdg && host.DirectoryExists(xdg))
+                return new(xdg, DesktopSource.XdgDesktop);
+            var desktop = home.Windows + @"\Desktop";
+            if (host.DirectoryExists(desktop)) return new(desktop, DesktopSource.HomeDesktop);
         }
         return new(host.SpecialDesktop(), DesktopSource.PrefixDesktop);
     }
 
-    /// <summary><c>XDG_DESKTOP_DIR</c> from a <c>user-dirs.dirs</c> text: quotes removed, <c>$HOME</c>/<c>${HOME}</c> expanded; absolute only.</summary>
-    internal static string? XdgDesktop(string dirs, string home)
+    /// <summary>A host home: its Windows form (inside Wine) and, when known, its Linux form (to map <c>/</c>-paths onto it).</summary>
+    internal sealed record HostHome(string Windows, string? Linux);
+
+    /// <summary><c>WINEHOMEDIR</c> first, then <c>HOME</c>; empty, relative or malformed values are missing.</summary>
+    internal static IEnumerable<HostHome> Homes(LogsHost host)
     {
+        if (host.Environment("WINEHOMEDIR") is { Length: > 0 } wine)
+        {
+            var windows = (wine.StartsWith(@"\??\", StringComparison.Ordinal) ? wine[4..] : wine).TrimEnd('\\');
+            if (windows.Length > 2 && char.IsAsciiLetter(windows[0]) && windows[1] == ':' && windows[2] == '\\')
+                yield return new(windows, char.ToUpperInvariant(windows[0]) == 'Z' ? windows[2..].Replace('\\', '/') : null);
+        }
+        if (host.Environment("HOME") is { Length: > 1 } home && home.StartsWith('/'))
+        {
+            home = home.TrimEnd('/');
+            if (home.Length > 0) yield return new(ToWine(home), home);
+        }
+    }
+
+    /// <summary>
+    /// <c>XDG_DESKTOP_DIR</c> from a <c>user-dirs.dirs</c> text, in Windows form: quotes removed, <c>$HOME</c>/<c>${HOME}</c> expanded to the
+    /// home, an absolute <c>/</c>-path mapped onto the home's drive form (under the home) or Wine's <c>Z:</c> (elsewhere). Null when absent.
+    /// </summary>
+    internal static string? XdgDesktop(string dirs, HostHome home)
+    {
+        const string Token = "\u0001HOME";
         string? found = null;
         foreach (var raw in dirs.Split('\n'))
         {
@@ -252,17 +277,24 @@ public static class LogsHandoff
             if (equals < 0 || line[..equals].Trim() != "XDG_DESKTOP_DIR") continue;
             var value = line[(equals + 1)..].Trim();
             if (value.Length >= 2 && (value[0] == '"' && value[^1] == '"' || value[0] == '\'' && value[^1] == '\'')) value = value[1..^1];
-            value = value.Replace("\\\"", "\"", StringComparison.Ordinal).Replace("${HOME}", home, StringComparison.Ordinal).Replace("$HOME", home, StringComparison.Ordinal);
+            value = value.Replace("\\\"", "\"", StringComparison.Ordinal).Replace("${HOME}", Token, StringComparison.Ordinal).Replace("$HOME", Token, StringComparison.Ordinal);
             found = value; // the last assignment wins, as in the shell that sources it
         }
-        if (found is null || !found.StartsWith('/') || found.Contains('\0', StringComparison.Ordinal)) return null;
+        if (found is null || found.Contains('\0', StringComparison.Ordinal)) return null;
         found = found.TrimEnd('/');
-        return found.Length == 0 ? null : found;
+        if (found.StartsWith(Token, StringComparison.Ordinal))
+        {
+            var rest = found[Token.Length..];
+            return rest.Length == 0 || rest[0] == '/' ? home.Windows + rest.Replace('/', '\\') : null;
+        }
+        if (found.Length == 0 || !found.StartsWith('/') || found.Contains('\u0001', StringComparison.Ordinal)) return null;
+        if (home.Linux is { } linux && (found == linux || found.StartsWith(linux + "/", StringComparison.Ordinal)))
+            return home.Windows + found[linux.Length..].Replace('/', '\\');
+        return ToWine(found);
     }
 
     /// <summary>A Linux path as Wine shows it: <c>Z:</c> is the Linux root (<c>/home/u/Desktop</c> → <c>Z:\home\u\Desktop</c>).</summary>
     public static string ToWine(string linux) => "Z:" + linux.Replace('/', '\\');
-
     /// <summary>Resolves the Desktop and writes the zip there (off the UI thread).</summary>
     public static (LogBundle Bundle, DesktopChoice Desktop) Collect(LogBundleRequest request, LogsHost host)
     {
