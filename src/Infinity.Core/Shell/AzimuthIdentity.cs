@@ -16,6 +16,15 @@ public sealed record AzimuthCandidate(string ProfileId, DateTimeOffset? LastPlay
 /// </summary>
 public static class AzimuthIdentity
 {
+    /// <summary>OD-240: what a refused Azimuth (noob) create says: the account already has its identity; never retried under another name.</summary>
+    public const string ExistsKey = "profiles.azimuth_identity_exists";
+
+    /// <summary>
+    /// The string key for a refused profile create, when it is the identity rule: <c>ACCOUNTS.PROFILE_LIMIT</c> on a non-Hardcore
+    /// create (CAREERS.md §2: one live noob profile per account) is <see cref="ExistsKey"/>; null for anything else.
+    /// </summary>
+    public static string? RefusalKey(string? code, bool hardcore) => !hardcore && code == ErrorCodes.AccountsProfileLimit ? ExistsKey : null;
+
     /// <summary>The rule: the newest <see cref="AzimuthCandidate.LastPlayedAt"/>; a tie or none set, the oldest <see cref="AzimuthCandidate.CreatedAt"/>; then the id.</summary>
     public static string? Pick(IEnumerable<AzimuthCandidate> candidates)
     {
