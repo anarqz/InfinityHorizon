@@ -196,7 +196,6 @@ public sealed partial class ShellViewModel
     {
         SavesScreen.Start when _startRow is null => SavesScreen.Home,
         SavesScreen.Delete when !ShowDeleteProfile => SavesScreen.Home,
-        SavesScreen.Resolve when _subject is null => SavesScreen.Home,
         var s => s,
     };
 
@@ -208,7 +207,6 @@ public sealed partial class ShellViewModel
     public bool ShowSavesHome => ShowSaveManager && SavesCurrent == SavesScreen.Home;
     public bool ShowSavesCreate => ShowSaveManager && SavesCurrent == SavesScreen.Create;
     public bool ShowSavesStart => ShowSaveManager && SavesCurrent == SavesScreen.Start;
-    public bool ShowSavesResolve => ShowSaveManager && SavesCurrent == SavesScreen.Resolve;
     public bool ShowSavesPick => ShowSaveManager && SavesCurrent == SavesScreen.Pick;
     public bool ShowSavesHistory => ShowSaveManager && SavesCurrent == SavesScreen.History;
     public bool ShowSavesDelete => ShowSaveManager && SavesCurrent == SavesScreen.Delete;
@@ -1007,6 +1005,26 @@ public sealed partial class ShellViewModel
     public string ResolveTitle => _subject is null ? string.Empty : S.Format("sm.resolve_title", ("mode", ModeWord(SlotOf(_subject))));
     public bool ResolveHardcore => _subject?.Hardcore == true;
 
+    /// <summary>
+    /// Owner 2026-11-12 (first-hand: "The resolve page, let's move to a popup instead of a full page"): cloud vs this PC is a centred popup
+    /// over the page it was opened from, in the queue of the other save confirmations (it waits behind <see cref="PromptOpen"/>). Each side
+    /// says what its choice replaces and the backup; Keep cloud backs this PC's save up first and is refused while the game runs (the
+    /// popup stays and says why); Not now writes nothing.
+    /// </summary>
+    public bool ShowResolveConfirm => _subject is not null && !PromptOpen;
+
+    public bool ShowResolveBlocked => _gameRunning && _subject is not null;
+
+    /// <summary>Not now: the popup closes, nothing written.</summary>
+    public void CloseResolve()
+    {
+        if (_subject is null) return;
+        _subject = null;
+        Message = null;
+        Log("saves: resolve closed (nothing written)");
+        ChangedSaves();
+    }
+
     private static SaveSlot SlotOf(ProfileRow row) => row.Hardcore ? SaveSlot.Hardcore : SaveSlot.Noob;
 
     private void OpenResolve(ProfileRow row)
@@ -1037,7 +1055,11 @@ public sealed partial class ShellViewModel
             new(S["sm.kv.revision"], local is null ? S["sm.unknown"] : S.Format("sm.local_rev", ("n", local.Revision.Number.ToString(c)))),
         ])
         { ActionLabel = Recommended(S["sm.keep_pc"], _resolvePick == ResolvePick.ThisPc), Recommended = _resolvePick == ResolvePick.ThisPc };
-        SavesGo(SavesScreen.Resolve);
+        _menu.Close();
+        Message = null;
+        RefreshGameRunning();
+        Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} asked (popup)");
+        ChangedSaves();
     }
 
     private string Recommended(string label, bool recommended) => recommended ? S.Format("sm.recommended", ("label", label)) : label;
@@ -1045,9 +1067,16 @@ public sealed partial class ShellViewModel
     /// <summary>"Keep cloud": the cloud's newest revision onto this PC (this PC's save archived in History first, then by the install).</summary>
     public async Task ResolveKeepCloudAsync()
     {
-        if (_subject is not { } row || _session is not { } session || _install is null || CloudSaveClient() is not { } client || ParseXuid(row.Profile) is not { } xuid) return;
+        if (_subject is not { } row) return;
         await RefreshGameRunningNowAsync();
-        if (_gameRunning) { Message = S["saves.game_running"]; return; }
+        if (_gameRunning) { Message = S["saves.game_running"]; ChangedSaves(); return; } // the popup stays and says why
+        // owner 2026-11-12 (never a silent no-op): without the cloud or the Azimuth folder the popup says the download cannot run
+        if (_session is not { } session || _install is null || CloudSaveClient() is not { } client || ParseXuid(row.Profile) is not { } xuid)
+        {
+            Message = S["careers.download_failed"];
+            ChangedSaves();
+            return;
+        }
         ForgetKeptThisPc(CurrentGame.Id, xuid); // the player now picks the cloud
         await Run(S.Format("busy.downloading", ("mode", BusyMode(row.Profile.Mode))), async () =>
         {
@@ -1062,8 +1091,10 @@ public sealed partial class ShellViewModel
             var outcome = await client.Saves.InstallHeadAsync(access, root, xuid, head, decision.LocalContent, "before-resolve");
             Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} keep cloud r{head.Revision} → {(outcome.Failure is null ? "installed" : outcome.Failure.Code)}");
             if (outcome.Failure is not null) { Message = S["careers.download_failed"]; return; }
+            _subject = null;
             Done(S["sm.kept_cloud"]);
         });
+        ChangedSaves(); // a failure keeps the popup open with its reason (Message)
     }
 
     /// <summary>
@@ -1087,6 +1118,7 @@ public sealed partial class ShellViewModel
             else Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} keep this PC not recorded (this PC's save unreadable)");
         }
         Log($"saves: resolve {row.Profile.Game} {row.Profile.ProfileId} keep this PC (uploaded at the next Play)");
+        _subject = null;
         PickProfileRow(row);
         Done(S["sm.kept_pc"]); // the prototype's Keep this PC lands on Done, as Keep cloud does
     }
@@ -1618,7 +1650,7 @@ public sealed partial class ShellViewModel
         {
             nameof(SavesCurrent), nameof(ShowSaveManager), nameof(ShowPlainProfiles), nameof(ShowSavesHome), nameof(ShowSavesCreate), nameof(ShowSavesStart),
             nameof(ShowFloatingMenu),
-            nameof(ShowSavesResolve), nameof(ShowCopyConfirm), nameof(AwaitingPlayer), nameof(CopyConfirmLabel), nameof(ShowOldNoobNotice), nameof(ShowSavesPick), nameof(PickTitle), nameof(PickSub), nameof(PickEmpty), nameof(CanUseOtherSave),
+            nameof(ShowResolveConfirm), nameof(ShowResolveBlocked), nameof(ShowCopyConfirm), nameof(AwaitingPlayer), nameof(CopyConfirmLabel), nameof(ShowOldNoobNotice), nameof(ShowSavesPick), nameof(PickTitle), nameof(PickSub), nameof(PickEmpty), nameof(CanUseOtherSave),
             nameof(ShowSavesHistory), nameof(ShowSavesDelete),
             nameof(ShowSavesHelp), nameof(ShowSavesDone), nameof(ShowHelpLink), nameof(SavesCanGoBack), nameof(SavesTrail), nameof(SavesTrailLast),
             nameof(SavesSubtitle), nameof(ShowGameRunningNote), nameof(GameRunningText),

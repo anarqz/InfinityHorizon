@@ -45,7 +45,7 @@ public sealed partial class ShellViewModel
     /// notice is a centred popup over the window, one for every listed game. It waits behind any other prompt (<see cref="PromptOpen"/>), a
     /// save copy's confirmation and START CAREER, so popups never stack; the copy itself runs under the busy overlay above it.
     /// </summary>
-    public bool ShowOldNoobNotice => OldNoobNoticeRows.Count > 0 && _session is not null && !PromptOpen && _copyAsk is null && !ShowPlayStart;
+    public bool ShowOldNoobNotice => OldNoobNoticeRows.Count > 0 && _session is not null && !PromptOpen && _copyAsk is null && _subject is null && !ShowPlayStart;
 
     /// <summary>A game still waits for its choice: "Not now" closes the popup for this launcher run (it asks again at the next start).</summary>
     public bool OldNoobNoticeUndecided => OldNoobNoticeRows.Any(r => !r.Decided);
