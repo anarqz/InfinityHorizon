@@ -118,17 +118,30 @@ public static class LocalLevels
     /// <summary>The same, with the game's folder given (tests).</summary>
     public static LocalLevel Of(GameDefinition game, SaveProfile save, Func<string?> gameFolder)
     {
-        ArgumentNullException.ThrowIfNull(game);
         ArgumentNullException.ThrowIfNull(save);
+        return Of(game, save.Xp, save.Level, gameFolder);
+    }
+
+    /// <summary>
+    /// The level of a save known only by its numbers (<paramref name="xp"/>, the stored <paramref name="level"/>): an old Noob cloud save's
+    /// revision summary, read exactly as a save of this PC (the same field, table and offset).
+    /// </summary>
+    public static LocalLevel Of(GameDefinition game, long? xp, long? level, string? azimuthRoot) =>
+        Of(game, xp, level, () => AzimuthTitles.GameFolder(azimuthRoot, game));
+
+    /// <summary>The same, with the game's folder given (tests).</summary>
+    public static LocalLevel Of(GameDefinition game, long? xp, long? level, Func<string?> gameFolder)
+    {
+        ArgumentNullException.ThrowIfNull(game);
         ArgumentNullException.ThrowIfNull(gameFolder);
         if (game.LocalLevel is not { } source) return LocalLevel.Unknown(NotKnown);
         if (source.Field == LevelField.Level)
-            return save.Level is { } stored and >= 0 ? new LocalLevel(stored + source.ShownOffset, null) : LocalLevel.Unknown(NoValue);
-        if (save.Xp is not { } xp || xp < 0) return LocalLevel.Unknown(NoValue);
+            return level is { } stored and >= 0 ? new LocalLevel(stored + source.ShownOffset, null) : LocalLevel.Unknown(NoValue);
+        if (xp is not { } x || x < 0) return LocalLevel.Unknown(NoValue);
         if (source.Table is not { } file) return LocalLevel.Unknown(NotKnown);
         if (gameFolder() is not { } folder) return LocalLevel.Unknown(NoGame);
         var (table, why) = TableAt(Path.Combine(folder, file.Archive), file.Entry);
-        return table is null ? LocalLevel.Unknown(why ?? BadTable) : new LocalLevel(Math.Min(table.LevelOf(xp) + source.ShownOffset, table.TopLevel), null);
+        return table is null ? LocalLevel.Unknown(why ?? BadTable) : new LocalLevel(Math.Min(table.LevelOf(x) + source.ShownOffset, table.TopLevel), null);
     }
 
     /// <summary>The XP table in <paramref name="archive"/>'s <paramref name="entry"/>, cached per path, time and size; or why not.</summary>

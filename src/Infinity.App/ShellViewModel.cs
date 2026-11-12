@@ -463,6 +463,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _pending = null;
         CloseCareerRestore(); // OD-133
         _oldSaveResult = null; // OD-240: the old saves' last result belongs to the account
+        ClearOldNoobNotice(); // T-1111-AZIMUTH: so does the former-Noob notice
         Games.Clear();
         Profiles.Clear();
         Gate = _gate.SignOut();
@@ -516,6 +517,8 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         loading.Step(S["startup.loading_profiles"]);
         await OfferProfileUpsertAsync(); // OD-118: this PC's profiles that could go online, and the account cache refreshed (P3)
         await RefreshOldSavesAsync(); // OD-240: the old Noob saves for the quiet Settings entry (never a startup message)
+        // T-1111-AZIMUTH (owner 2026-11-11, amends OD-240 #4): the one-time former-Noob notice on PLAY, decided here; it never blocks PLAY
+        await CheckOldNoobNoticeQuietlyAsync(() => loading.Step(S["startup.checking_old_saves"]));
         loading.Step(S["startup.loading_friends"]);
         await WaitForFriendsAsync(TimeSpan.FromSeconds(10));
     }

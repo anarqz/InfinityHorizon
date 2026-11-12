@@ -177,6 +177,38 @@ public static partial class SaveSources
     }
 
     /// <summary>
+    /// The first-launch notice for former Noob players (T-1111-AZIMUTH, owner 2026-11-11): only the AZIMUTH profiles' own old folders of
+    /// <paramref name="game"/> (<c>player-1\User_&lt;noob XUID&gt;</c> of each of <paramref name="owners"/>, <see cref="OldSaves.Owners"/>: decided
+    /// by mode, never a HARDCORE XUID, never <c>User_9000000000000</c>), each as its newest sealed revision. Reads only; no history, no archive.
+    /// </summary>
+    public static IReadOnlyList<SaveSource> OldNoobFolders(GameDefinition game, string savesRoot, IEnumerable<OldSaveOwner> owners)
+    {
+        ArgumentNullException.ThrowIfNull(game);
+        ArgumentNullException.ThrowIfNull(savesRoot);
+        ArgumentNullException.ThrowIfNull(owners);
+        var layout = game.Saves;
+        var player = Path.Combine(savesRoot, layout.PlayerDir);
+        var found = new List<SaveSource>();
+        foreach (var owner in owners)
+        {
+            if (owner.Xuid == AzimuthSaves.OfflineXuid) continue;
+            var name = layout.UserFolder(owner.Xuid);
+            var dir = Path.Combine(player, name);
+            if (!Directory.Exists(dir) || Safe(() => AzimuthSaves.NewestSealed(dir)) is not { } revision) continue;
+            found.Add(new SaveSource(Key("pc", revision.Path), SaveSourceKind.OldNoob, Profile(name, owner.Xuid, revision), player) { Gamertag = owner.Gamertag });
+        }
+        return found;
+    }
+
+    /// <summary>A sealed revision as the picker and the AZIMUTH row read it (credits, XP, stored level, modified).</summary>
+    public static SaveProfile Read(string folder, ulong? xuid, LocalRevision revision)
+    {
+        ArgumentNullException.ThrowIfNull(folder);
+        ArgumentNullException.ThrowIfNull(revision);
+        return Profile(folder, xuid, revision);
+    }
+
+    /// <summary>
     /// azimuth9 "Pick a folder from your PC…": <paramref name="folder"/> as a save of <paramref name="game"/>, checked with the game's own rules
     /// before anything is written: a <c>User_*</c> container (not <c>User_9000000000000</c> itself) with <c>revisions\&lt;16 hex&gt;\{commit,
     /// data}</c>, whose newest sealed revision holds the game's required files and only its allowed ones (another game's save says which game).

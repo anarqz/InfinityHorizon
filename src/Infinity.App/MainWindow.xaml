@@ -1886,6 +1886,43 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <!-- T-1111-AZIMUTH (owner 2026-11-11, amends OD-240 #4): the one-time former-Noob notice, under the PLAY buttons: it never blocks
+                     PLAY and nothing happens without a click. One row per game: the game and the source, LV · CR · saved of both saves, its choice. -->
+                <Border x:Name="OldNoobNotice" Style="{StaticResource SmNote}" Margin="7,16,7,0" Padding="18,14"
+                        Visibility="{Binding ShowOldNoobNotice, Converter={StaticResource Visible}}">
+                  <StackPanel>
+                    <TextBlock Text="{Binding S[oldnotice.title]}" FontWeight="Bold" FontSize="15" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding S[oldnotice.body]}" Style="{StaticResource SmHint}" Margin="0,4,0,10" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding OldNoobNoticeRows}" Focusable="False">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Border Style="{StaticResource SmCard}" Padding="14,10" Margin="0,0,0,8">
+                            <StackPanel>
+                              <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0"
+                                            Visibility="{Binding Undecided, Converter={StaticResource Visible}}">
+                                  <Button Content="{Binding DataContext.S[oldnotice.copy], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmPrimary}"
+                                          Margin="0,0,8,0" Click="OnOldNoobNoticeCopy" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                  <Button Content="{Binding DataContext.S[oldnotice.keep], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
+                                          Click="OnOldNoobNoticeKeep" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                </StackPanel>
+                                <StackPanel VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                  <TextBlock Text="{Binding OldLine}" ToolTip="{Binding OldTip}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                  <TextBlock Text="{Binding AzimuthLine}" ToolTip="{Binding AzimuthTip}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,1,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                              </DockPanel>
+                              <TextBlock Text="{Binding Result}" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"
+                                         Visibility="{Binding HasResult, Converter={StaticResource Visible}}" />
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="{Binding S[oldnotice.close]}" Style="{StaticResource SmButton}" HorizontalAlignment="Left" Click="OnOldNoobNoticeClose"
+                            Visibility="{Binding OldNoobNoticeDone, Converter={StaticResource Visible}}" />
+                  </StackPanel>
+                </Border>
                 <!-- (1) START {MODE} CAREER: the inline choice (fresh / from my other profile / from this PC's save); Play follows -->
                 <StackPanel Visibility="{Binding ShowPlayStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Center">
                   <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
