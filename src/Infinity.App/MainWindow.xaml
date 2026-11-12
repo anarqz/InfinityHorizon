@@ -1401,37 +1401,6 @@
                   </Border>
                 </StackPanel>
 
-                <!-- ============ COPY: compare, then confirm (only into Azimuth on this PC today) ============ -->
-                <StackPanel MaxWidth="860" Visibility="{Binding ShowSavesCopy, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding CopyTitle}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding CopySub}" Style="{StaticResource SmSub}" />
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="60" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <Border Style="{StaticResource SmCard}" DataContext="{Binding CopyFromSide}">
-                      <StackPanel>
-                        <Border Style="{StaticResource SmPill}" HorizontalAlignment="Left"><TextBlock Text="{Binding Title}" FontSize="12" TextWrapping="Wrap" /></Border>
-                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
-                      </StackPanel>
-                    </Border>
-                    <TextBlock Grid.Column="1" Text="→" FontSize="28" Foreground="{StaticResource InfinityMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    <Border Grid.Column="2" Style="{StaticResource SmCard}" DataContext="{Binding CopyToSide}">
-                      <StackPanel>
-                        <Border Style="{StaticResource SmPill}" HorizontalAlignment="Left"><TextBlock Text="{Binding Title}" FontSize="12" TextWrapping="Wrap" /></Border>
-                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
-                      </StackPanel>
-                    </Border>
-                  </Grid>
-                  <Border Style="{StaticResource SmNote}"><TextBlock Text="{Binding CopyNote}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" /></Border>
-                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowCopyBlocked, Converter={StaticResource Visible}}">
-                    <TextBlock Text="{Binding CopyBlockedText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
-                  </Border>
-                  <WrapPanel Margin="0,18,0,0">
-                    <Button Content="{Binding S[sm.copy_confirm]}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}"
-                            Click="OnConfirmCopy" IsEnabled="{Binding CanConfirmCopy}" />
-                    <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" Click="OnSavesBack" />
-                  </WrapPanel>
-                </StackPanel>
-
                 <!-- ============ PICK: "Use another save on this PC…" (owner 2026-11-11), every save of the game here, the pick becomes the Azimuth save ============ -->
                 <StackPanel x:Name="OtherSavePicker" MaxWidth="860" Visibility="{Binding ShowSavesPick, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding PickTitle}" Style="{StaticResource SmH1}" />
@@ -1818,23 +1787,22 @@
                 </ItemsControl>
               </ScrollViewer>
               <StackPanel Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
-                <TextBlock Text="{Binding PlayGuidance}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,14"
-                           Foreground="{StaticResource InfinityMuted}" />
-                <!-- §1.1: mods never block Play silently; the reason and the way to Mods are shown here. -->
-                <!-- OD-118 T1c: the notice above its buttons, which wrap, so neither is clipped at 1172x746 in pt-BR. -->
-                <StackPanel Margin="0,0,0,14" Visibility="{Binding ShowModPlayNotice, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding ModPlayNotice}" TextWrapping="Wrap" MaxWidth="560" HorizontalAlignment="Center" TextAlignment="Center" Foreground="{StaticResource InfinityGold}" />
-                  <WrapPanel Margin="0,8,0,0" HorizontalAlignment="Center">
-                    <Button Content="{Binding S[mods.open]}" Click="OnNavMods" IsEnabled="{Binding CanOpenMods}" Padding="10,4" Margin="0,0,8,6" />
-                    <!-- OD-118 T1f: the catalog failed: retry it here (GitHub, never Infinity). -->
-                    <Button Content="{Binding S[updater.retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,4" Margin="0,0,8,6"
-                            Visibility="{Binding ShowCatalogRetry, Converter={StaticResource Visible}}" />
-                  </WrapPanel>
+                <!-- Owner 2026-11-12 (first-hand, WINDOWS chat): PLAY holds only the logo, the game tiles, this ONE notice line, the profile cards and
+                     "manage profiles". Information is this line (the most important message first, "+N more" with the others as its tooltip,
+                     ShellViewModel.PlayNotice.cs); a decision is a centred popup (the former-Noob choice, START CAREER, a save copy's confirmation).
+                     OD-118 T1c: it wraps, so it is never clipped at 1172x746 in pt-BR. -->
+                <StackPanel x:Name="PlayNoticeLine" Margin="0,0,0,14" HorizontalAlignment="Center" Visibility="{Binding HasPlayNotice, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding PlayNotice}" TextWrapping="Wrap" MaxWidth="600" HorizontalAlignment="Center" TextAlignment="Center"
+                             Foreground="{StaticResource InfinityGold}" AutomationProperties.LiveSetting="Polite" />
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
+                    <Button x:Name="PlayNoticeLink" Content="{Binding PlayNoticeActionLabel}" Style="{StaticResource SmLink}" Click="OnPlayNoticeAction"
+                            IsEnabled="{Binding PlayNoticeActionEnabled}" Margin="0,0,12,0" Visibility="{Binding HasPlayNoticeAction, Converter={StaticResource Visible}}" />
+                    <TextBlock Text="{Binding PlayNoticeMore}" ToolTip="{Binding PlayNoticeMoreTip}" FontSize="12" VerticalAlignment="Center"
+                               Foreground="{StaticResource InfinityFaint}" Visibility="{Binding HasPlayNoticeMore, Converter={StaticResource Visible}}" />
+                  </StackPanel>
                 </StackPanel>
-                <Button Content="{Binding S[crash.review]}" Click="OnReviewCrash" HorizontalAlignment="Center" Margin="0,0,0,14"
-                        Visibility="{Binding HasCrashReport, Converter={StaticResource Visible}}" />
                 <!-- one button per profile: its career in the selected game, then PLAY {MODE} (or start / create / resolve / not offered) -->
-                <ItemsControl x:Name="PlayButtonsRow" ItemsSource="{Binding PlayButtons}" Focusable="False" IsEnabled="{Binding CanUsePlayButtons}" Visibility="{Binding ShowPlayStart, Converter={StaticResource Hidden}}">
+                <ItemsControl x:Name="PlayButtonsRow" ItemsSource="{Binding PlayButtons}" Focusable="False" IsEnabled="{Binding CanUsePlayButtons}">
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -1886,98 +1854,9 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <!-- T-1111-AZIMUTH (owner 2026-11-11, amends OD-240 #4): the one-time former-Noob notice, under the PLAY buttons: it never blocks
-                     PLAY and nothing happens without a click. One row per game: the game and the source, LV · CR · saved of both saves, its choice. -->
-                <Border x:Name="OldNoobNotice" Style="{StaticResource SmNote}" Margin="7,16,7,0" Padding="18,14"
-                        Visibility="{Binding ShowOldNoobNotice, Converter={StaticResource Visible}}">
-                  <StackPanel>
-                    <TextBlock Text="{Binding S[oldnotice.title]}" FontWeight="Bold" FontSize="15" TextWrapping="Wrap" />
-                    <TextBlock Text="{Binding S[oldnotice.body]}" Style="{StaticResource SmHint}" Margin="0,4,0,10" TextWrapping="Wrap" />
-                    <ItemsControl ItemsSource="{Binding OldNoobNoticeRows}" Focusable="False">
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                          <Border Style="{StaticResource SmCard}" Padding="14,10" Margin="0,0,0,8">
-                            <StackPanel>
-                              <DockPanel>
-                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0"
-                                            Visibility="{Binding Undecided, Converter={StaticResource Visible}}">
-                                  <Button Content="{Binding DataContext.S[oldnotice.copy], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmPrimary}"
-                                          Margin="0,0,8,0" Click="OnOldNoobNoticeCopy" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
-                                  <Button Content="{Binding DataContext.S[oldnotice.keep], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
-                                          Click="OnOldNoobNoticeKeep" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
-                                </StackPanel>
-                                <StackPanel VerticalAlignment="Center">
-                                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                  <TextBlock Text="{Binding OldLine}" ToolTip="{Binding OldTip}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextWrapping="Wrap" />
-                                  <TextBlock Text="{Binding AzimuthLine}" ToolTip="{Binding AzimuthTip}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,1,0,0" TextWrapping="Wrap" />
-                                </StackPanel>
-                              </DockPanel>
-                              <TextBlock Text="{Binding Result}" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"
-                                         Visibility="{Binding HasResult, Converter={StaticResource Visible}}" />
-                            </StackPanel>
-                          </Border>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <Button Content="{Binding S[oldnotice.close]}" Style="{StaticResource SmButton}" HorizontalAlignment="Left" Click="OnOldNoobNoticeClose"
-                            Visibility="{Binding OldNoobNoticeDone, Converter={StaticResource Visible}}" />
-                  </StackPanel>
-                </Border>
-                <!-- (1) START {MODE} CAREER: the inline choice (fresh / from my other profile / from this PC's save); Play follows -->
-                <StackPanel Visibility="{Binding ShowPlayStart, Converter={StaticResource Visible}}" MaxWidth="660" HorizontalAlignment="Center">
-                  <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding StartSub}" Style="{StaticResource SmSub}" />
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFresh" IsEnabled="{Binding Idle}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[sm.start.fresh]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFreshHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromProfile" IsEnabled="{Binding StartFromProfileEnabled}"
-                          Visibility="{Binding ShowStartFromProfile, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding StartFromProfileLabel}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFromProfileHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <!-- B2 (OD-239): shown on a HARDCORE card only, disabled with its reason; an Azimuth card starts fresh only -->
-                  <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromPc" IsEnabled="False"
-                          Visibility="{Binding ShowStartFromPc, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[sm.start.from_pc]}" FontWeight="Bold" FontSize="15" />
-                      <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
-                    </StackPanel>
-                  </Button>
-                  <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
-                    <StackPanel>
-                      <TextBlock Text="{Binding S[sm.start.hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                      <TextBlock Text="{Binding S[seed.warning]}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
-                                 Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
-                    </StackPanel>
-                  </Border>
-                  <WrapPanel Margin="0,12,0,0">
-                    <Button Content="{Binding S[saves.conflict_not_now]}" Click="OnClosePlayStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
-                    <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
-                            Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
-                  </WrapPanel>
-                </StackPanel>
                 <Button Content="{Binding S[play.manage_profiles]}" Style="{StaticResource SmLink}" HorizontalAlignment="Center" Margin="0,14,0,0" Click="OnNavProfiles" />
-                <TextBlock Text="{Binding PlayStatus}" Margin="0,14,0,0" TextWrapping="Wrap" TextAlignment="Center" FontWeight="Bold"
-                           AutomationProperties.LiveSetting="Polite" />
               </StackPanel>
               <!-- owner 2026-11-10 (3.1.1): the queue is a modal over the whole window (QueueOverlay, below), no longer a card here -->
-              <!-- games-5: the old page's "Use a save from this PC" link is gone (a save from this PC is one of START CAREER's choices and a
-                   Profiles tool); only Quit game stays here while a game runs. -->
-              <WrapPanel Margin="0,14,0,0" HorizontalAlignment="Center" Visibility="{Binding ShowPlayAction, Converter={StaticResource Visible}}">
-                <Button Content="{Binding S[supervisor.quit_button]}" Margin="0" Click="OnQuitGame"
-                        Visibility="{Binding GameStarted, Converter={StaticResource Visible}}" />
-              </WrapPanel>
-              <!-- OD-133: a career a fresh start moved aside on this PC comes back (server dry run first; disabled until MB-133-1). -->
-              <StackPanel Margin="0,8,0,0" HorizontalAlignment="Center" Visibility="{Binding ShowCareerRestoreEntry, Converter={StaticResource Visible}}">
-                <Button Content="{Binding S[restore.entry]}" Style="{StaticResource LinkButton}" HorizontalAlignment="Center" Margin="0"
-                        Click="OnOpenCareerRestore" IsEnabled="{Binding CanRestoreCareer}" />
-                <TextBlock Text="{Binding CareerRestoreNote}" FontSize="11" TextWrapping="Wrap" TextAlignment="Center" Foreground="{StaticResource InfinityFaint}" Margin="0,2,0,0" />
-              </StackPanel>
             </StackPanel>
             </Grid>
           </ScrollViewer>
@@ -2734,6 +2613,144 @@
       </DockPanel>
     </Border>
   </Grid>
+    <!-- Owner 2026-11-12 (first-hand, WINDOWS chat: "the warning as a popup in the middle of the screen, so players are AWARE"; only what needs the
+         player's decision is a popup, everything else is PLAY's notice line). Three centred popups over the window, one at a time (each waits
+         behind the prompts of ShellViewModel.PromptOpen, the former-Noob one also behind the other two). The same light dim as the queue
+         modal: the page stays visible behind; nothing under it takes a click. -->
+    <!-- T-1111-AZIMUTH (OD-243): the one-time former-Noob choice, one row per game: the game and the source, LV · CR · saved of both saves,
+         Copy my Noob save (backup first, its path in the row's result, under the busy overlay) / Keep Azimuth's save; Close once all are
+         chosen, Not now closes it unasked (asked again at the next start). -->
+    <Border x:Name="OldNoobNotice" Panel.ZIndex="94" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
+            KeyboardNavigation.ControlTabNavigation="Cycle" Visibility="{Binding ShowOldNoobNotice, Converter={StaticResource Visible}}"
+            KeyDown="OnOldNoobNoticeKey" IsVisibleChanged="OnOldNoobNoticeVisible" AutomationProperties.Name="{Binding S[oldnotice.title]}">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{x:Static local:SlotBrushes.Azimuth}" BorderThickness="1.5"
+              CornerRadius="18" Padding="32,26" MaxWidth="680" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="{Binding S[sm.azimuth]}" Foreground="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmModeTag}" HorizontalAlignment="Left" />
+            <TextBlock Text="{Binding S[oldnotice.title]}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding S[oldnotice.body]}" Style="{StaticResource SmHint}" FontSize="14" Margin="0,8,0,16" TextWrapping="Wrap" />
+          </StackPanel>
+          <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button x:Name="OldNoobNoticeLater" Content="{Binding S[oldnotice.later]}" Style="{StaticResource SmButton}" Click="OnOldNoobNoticeLater"
+                    IsEnabled="{Binding Idle}" Visibility="{Binding OldNoobNoticeUndecided, Converter={StaticResource Visible}}" />
+            <Button x:Name="OldNoobNoticeCloseButton" Content="{Binding S[oldnotice.close]}" Style="{StaticResource SmPrimary}" Click="OnOldNoobNoticeClose"
+                    Background="{x:Static local:SlotBrushes.Azimuth}" Visibility="{Binding OldNoobNoticeDone, Converter={StaticResource Visible}}" />
+          </StackPanel>
+          <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="380" FocusVisualStyle="{x:Null}">
+            <ItemsControl ItemsSource="{Binding OldNoobNoticeRows}" Focusable="False">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Style="{StaticResource SmCard}" Padding="16,12" Margin="0,0,0,10">
+                    <StackPanel>
+                      <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="15" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding OldLine}" ToolTip="{Binding OldTip}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding AzimuthLine}" ToolTip="{Binding AzimuthTip}" FontSize="12" Foreground="{StaticResource InfinityMuted}" Margin="0,2,0,0" TextWrapping="Wrap" />
+                      <WrapPanel Margin="0,12,0,0" Visibility="{Binding Undecided, Converter={StaticResource Visible}}">
+                        <Button Content="{Binding DataContext.S[oldnotice.copy], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmPrimary}"
+                                Background="{x:Static local:SlotBrushes.Azimuth}" Margin="0,0,8,0" Click="OnOldNoobNoticeCopy"
+                                IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
+                        <Button Content="{Binding DataContext.S[oldnotice.keep], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmButton}"
+                                Click="OnOldNoobNoticeKeep" IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}" />
+                      </WrapPanel>
+                      <TextBlock Text="{Binding Result}" Margin="0,10,0,0" TextWrapping="Wrap" FontSize="12" AutomationProperties.LiveSetting="Polite"
+                                 Visibility="{Binding HasResult, Converter={StaticResource Visible}}" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Border>
+    <!-- (owner 2026-11-12) START {MODE} CAREER, PLAY's choice (fresh / from my other profile / from this PC's save) as a popup; Play follows. -->
+    <Border x:Name="PlayStartPrompt" Panel.ZIndex="94" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
+            KeyboardNavigation.ControlTabNavigation="Cycle" Visibility="{Binding ShowPlayStart, Converter={StaticResource Visible}}"
+            IsVisibleChanged="OnPlayStartVisible" KeyDown="OnPlayStartKey" AutomationProperties.Name="{Binding CareerStartTitle}">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"
+              CornerRadius="18" Padding="32,26" MaxWidth="720" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+          <StackPanel>
+            <TextBlock Text="{Binding CareerStartTitle}" Style="{StaticResource SmH1}" />
+            <TextBlock Text="{Binding StartSub}" Style="{StaticResource SmSub}" />
+            <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFresh" IsEnabled="{Binding Idle}">
+              <StackPanel>
+                <TextBlock Text="{Binding S[sm.start.fresh]}" FontWeight="Bold" FontSize="15" />
+                <TextBlock Text="{Binding StartFreshHint}" Style="{StaticResource SmHint}" FontSize="14" />
+              </StackPanel>
+            </Button>
+            <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromProfile" IsEnabled="{Binding StartFromProfileEnabled}"
+                    Visibility="{Binding ShowStartFromProfile, Converter={StaticResource Visible}}">
+              <StackPanel>
+                <TextBlock Text="{Binding StartFromProfileLabel}" FontWeight="Bold" FontSize="15" />
+                <TextBlock Text="{Binding StartFromProfileHint}" Style="{StaticResource SmHint}" FontSize="14" />
+              </StackPanel>
+            </Button>
+            <!-- B2 (OD-239): shown on a HARDCORE card only, disabled with its reason; an Azimuth card starts fresh only -->
+            <Button Style="{StaticResource SmChoice}" Tag="{Binding StartAccent}" Click="OnPlayStartFromPc" IsEnabled="False"
+                    Visibility="{Binding ShowStartFromPc, Converter={StaticResource Visible}}">
+              <StackPanel>
+                <TextBlock Text="{Binding S[sm.start.from_pc]}" FontWeight="Bold" FontSize="15" />
+                <TextBlock Text="{Binding StartFromPcHint}" Style="{StaticResource SmHint}" FontSize="14" />
+              </StackPanel>
+            </Button>
+            <Border Style="{StaticResource SmNote}" Visibility="{Binding CareerStartHardcore, Converter={StaticResource Visible}}">
+              <StackPanel>
+                <TextBlock Text="{Binding S[sm.start.hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding S[seed.warning]}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}"
+                           Visibility="{Binding ShowCareerStartSeedWarning, Converter={StaticResource Visible}}" />
+              </StackPanel>
+            </Border>
+            <WrapPanel Margin="0,12,0,0">
+              <Button x:Name="PlayStartNotNow" Content="{Binding S[saves.conflict_not_now]}" Click="OnClosePlayStart" Style="{StaticResource SmButton}" Margin="0,0,10,0" />
+              <Button Content="{Binding S[careers.delete_empty]}" Click="OnDeleteStartCareer" Style="{StaticResource SmDanger}" Margin="0,0,10,0"
+                      Visibility="{Binding CanDeleteStartCareer, Converter={StaticResource Visible}}" IsEnabled="{Binding CanAskDeleteProfile}" />
+            </WrapPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Border>
+    <!-- (owner 2026-11-12) every confirmation that copies, restores or replaces a save: what is copied, what is replaced, the backup line,
+         Confirm / Cancel (ShellViewModel.AskCopy). Nothing is written before Confirm. -->
+    <Border x:Name="CopyConfirmOverlay" Panel.ZIndex="94" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
+            KeyboardNavigation.ControlTabNavigation="Cycle" Visibility="{Binding ShowCopyConfirm, Converter={StaticResource Visible}}"
+            IsVisibleChanged="OnCopyConfirmVisible" KeyDown="OnCopyConfirmKey" AutomationProperties.Name="{Binding CopyTitle}">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"
+              CornerRadius="18" Padding="32,26" MaxWidth="820" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+          <StackPanel>
+            <TextBlock Text="{Binding CopyTitle}" Style="{StaticResource SmH1}" />
+            <TextBlock Text="{Binding CopySub}" Style="{StaticResource SmSub}" />
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="60" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+              <Border Style="{StaticResource SmCard}" DataContext="{Binding CopyFromSide}">
+                <StackPanel>
+                  <Border Style="{StaticResource SmPill}" HorizontalAlignment="Left"><TextBlock Text="{Binding Title}" FontSize="12" TextWrapping="Wrap" /></Border>
+                  <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                </StackPanel>
+              </Border>
+              <TextBlock Grid.Column="1" Text="→" FontSize="28" Foreground="{StaticResource InfinityMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <Border Grid.Column="2" Style="{StaticResource SmCard}" DataContext="{Binding CopyToSide}">
+                <StackPanel>
+                  <Border Style="{StaticResource SmPill}" HorizontalAlignment="Left"><TextBlock Text="{Binding Title}" FontSize="12" TextWrapping="Wrap" /></Border>
+                  <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                </StackPanel>
+              </Border>
+            </Grid>
+            <Border Style="{StaticResource SmNote}"><TextBlock Text="{Binding CopyNote}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" /></Border>
+            <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowCopyBlocked, Converter={StaticResource Visible}}">
+              <TextBlock Text="{Binding CopyBlockedText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
+            </Border>
+            <WrapPanel Margin="0,18,0,0">
+              <Button x:Name="CopyConfirmButton" Content="{Binding CopyConfirmLabel}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}"
+                      Click="OnConfirmCopy" IsEnabled="{Binding CanConfirmCopy}" />
+              <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" x:Name="CopyCancelButton" Click="OnCancelCopy" />
+            </WrapPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Border>
     <!-- Owner 2026-10-28: an Azimuth never opened (data has only bin) blocks everything, like the mod progress dialog below. -->
     <Border x:Name="AzimuthFirstRunOverlay" Background="#FF0E0B16" Panel.ZIndex="95"
             Visibility="{Binding ShowAzimuthFirstRun, Converter={StaticResource Visible}}"

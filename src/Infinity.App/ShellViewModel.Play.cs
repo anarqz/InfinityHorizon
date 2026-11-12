@@ -129,8 +129,6 @@ public sealed partial class ShellViewModel
 
     public string LeaveQueueLabel => S[_leavingQueue ? "queue.leaving" : "queue.cancel"];
 
-    public string PlayGuidance => SetupNeeded ? S["play.setup_needed"] : S[Playing ? "play.session_active" : "play.ready"];
-
     /// <summary>The detected Azimuth folder (<c>--azimuth</c>, <c>FI_AZIMUTH</c>), or null.</summary>
     public AzimuthInstall? Install
     {

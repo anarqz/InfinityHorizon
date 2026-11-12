@@ -11,7 +11,7 @@ namespace Infinity.App;
 /// the centre overlay "Joining queue…" through the launch preparation and the admission request; the queue modal (blocking the screen
 /// like the overlay, its Leave queue button still working) once the server says where the player is; "Joining game…" from the admission
 /// until the game has started (the hook reports in, or the supervisor waits for it with the game open). An offline Play shows
-/// "Starting the game…" until the game runs. Every failure or cancel closes them and says why (Message / PlayStatus).
+/// "Starting the game…" until the game runs. Every failure or cancel closes them and says why (Message / PlayStatus, shown on PLAY's notice line).
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -35,7 +35,13 @@ public sealed partial class ShellViewModel
     /// (CR-L39), an Azimuth never opened, a mod confirmation and the sign-in form (OD-240: old Noob saves never prompt; Settings lists them).
     /// A new prompt is added here, nowhere else.
     /// </summary>
-    public bool AwaitingPlayer => ShowSaveConflict || ShowFreshStartRefused || ShowRestoreWaiting || ShowCareerRestore || ShowSeedPanel
+    public bool AwaitingPlayer => PromptOpen || ShowCopyConfirm || ShowOldNoobNotice;
+
+    /// <summary>
+    /// The prompts that come first. Owner 2026-11-12 (popups queue and never stack): a save copy's confirmation (<see cref="ShowCopyConfirm"/>)
+    /// and the former-Noob popup (<see cref="ShowOldNoobNotice"/>) wait behind any of these, and the former-Noob popup behind a confirmation.
+    /// </summary>
+    private bool PromptOpen => ShowSaveConflict || ShowFreshStartRefused || ShowRestoreWaiting || ShowCareerRestore || ShowSeedPanel
         || ShowTrustChange || ShowAzimuthFirstRun || ShowModConfirm || ShowSignIn;
 
     /// <summary>
@@ -90,7 +96,7 @@ public sealed partial class ShellViewModel
 
     /// <summary>
     /// Hotfix 3.1.2 (PLAY HARDCORE clicked 14 times, "no feedback"): a Play that stopped before the game was launched always says why where
-    /// the player looks, PLAY's own status line under the buttons (not only the window's bottom line), and the launcher log has it. A
+    /// the player looks, PLAY's notice line (owner 2026-11-12: <see cref="PlayNoticeItems"/>, rank 3), and the launcher log has it. A
     /// prompt that opened instead (the career start, a conflict) is its own answer.
     /// </summary>
     private void PlayRefusedVisibly()

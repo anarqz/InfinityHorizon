@@ -123,15 +123,16 @@ public sealed partial class ShellViewModel
             ChangedSaves();
             return;
         }
-        await CopyOtherSaveAsync(game, source, SaveSources.Title(S, source));
+        AskUseOtherSave(game, source, SaveSources.Title(S, source)); // owner 2026-11-12: the copy's centred confirmation first
     }
 
-    /// <summary>"Use this save" on a listed row.</summary>
-    internal async Task UseOtherSaveAsync(SavePickRow row)
+    /// <summary>"Use this save" on a listed row: the centred confirmation (owner 2026-11-12); its Confirm runs the copy.</summary>
+    internal Task UseOtherSaveAsync(SavePickRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (_pickScan?.Sources.FirstOrDefault(s => s.Key == row.Key) is not { } source) { SavesHome(); return; }
-        await CopyOtherSaveAsync(CurrentGame, source, row.Title);
+        if (_pickScan?.Sources.FirstOrDefault(s => s.Key == row.Key) is not { } source) { SavesHome(); return Task.CompletedTask; }
+        AskUseOtherSave(CurrentGame, source, row.Title);
+        return Task.CompletedTask;
     }
 
     /// <summary>

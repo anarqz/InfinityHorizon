@@ -30,7 +30,8 @@ public sealed record OldNoobNoticeRow(string Game, string Title, string OldLine,
 /// and offers per game "Copy my Noob save" (the existing <see cref="OldSaveMove"/> paths with the game's bundle: refused while the game runs,
 /// a verified backup of the Azimuth save first with its path shown, FM5's siblings included, the source only read) or "Keep Azimuth's save"
 /// (writes nothing). A choice is kept per account and game in <see cref="OldNoobNoticeStore"/>: never shown again on this PC. It never blocks
-/// PLAY (no overlay, not an <see cref="AwaitingPlayer"/> prompt) and nothing happens without a click. Profiles' entries stay as they are.
+/// PLAY: since 2026-11-12 (owner first-hand) a centred popup, one of the <see cref="AwaitingPlayer"/> prompts, with "Not now" to close it unasked;
+/// nothing happens without a click. Profiles' entries stay as they are.
 /// </summary>
 public sealed partial class ShellViewModel
 {
@@ -39,7 +40,15 @@ public sealed partial class ShellViewModel
 
     public ObservableCollection<OldNoobNoticeRow> OldNoobNoticeRows { get; } = [];
 
-    public bool ShowOldNoobNotice => OldNoobNoticeRows.Count > 0 && _session is not null;
+    /// <summary>
+    /// Owner 2026-11-12 (first-hand, WINDOWS chat: "make the warning show as a popup in the middle of the screen, so players are AWARE"): the
+    /// notice is a centred popup over the window, one for every listed game. It waits behind any other prompt (<see cref="PromptOpen"/>), a
+    /// save copy's confirmation and START CAREER, so popups never stack; the copy itself runs under the busy overlay above it.
+    /// </summary>
+    public bool ShowOldNoobNotice => OldNoobNoticeRows.Count > 0 && _session is not null && !PromptOpen && _copyAsk is null && !ShowPlayStart;
+
+    /// <summary>A game still waits for its choice: "Not now" closes the popup for this launcher run (it asks again at the next start).</summary>
+    public bool OldNoobNoticeUndecided => OldNoobNoticeRows.Any(r => !r.Decided);
 
     /// <summary>Every listed game has its choice: the notice can be closed.</summary>
     public bool OldNoobNoticeDone => OldNoobNoticeRows.Count > 0 && OldNoobNoticeRows.All(r => r.Decided);
@@ -204,6 +213,17 @@ public sealed partial class ShellViewModel
         ClearOldNoobNotice();
     }
 
+    /// <summary>
+    /// "Not now" (owner 2026-11-12, the popup must never trap the player, e.g. with the game still running): the popup closes and nothing is
+    /// written; the games without a choice are asked again at the next start (only a finished copy or Keep is kept, as before).
+    /// </summary>
+    public void PostponeOldNoobNotice()
+    {
+        if (OldNoobNoticeRows.Count == 0) return;
+        Log("saves: former-Noob notice: not now (" + string.Join(", ", OldNoobNoticeRows.Where(r => !r.Decided).Select(r => r.Game)) + " asked again at the next start)");
+        ClearOldNoobNotice();
+    }
+
     private void ClearOldNoobNotice()
     {
         _noticeGames = [];
@@ -238,5 +258,7 @@ public sealed partial class ShellViewModel
     {
         Changed(nameof(ShowOldNoobNotice));
         Changed(nameof(OldNoobNoticeDone));
+        Changed(nameof(OldNoobNoticeUndecided));
+        Changed(nameof(AwaitingPlayer));
     }
 }
