@@ -18,9 +18,7 @@ public enum SavesScreen
     /// <summary>Cloud vs this PC, side by side.</summary>
     Resolve,
 
-
-    /// <summary>Compare → (Check) → Confirm of one copy.</summary>
-    Copy,
+    // owner 2026-11-12: a copy's Compare → Confirm is a centred popup over the screen it came from, no longer a screen of its own
 
     /// <summary>Owner 2026-11-11: "Use another save on this PC…", every save container of the game on this PC to pick the new Azimuth save from.</summary>
     Pick,

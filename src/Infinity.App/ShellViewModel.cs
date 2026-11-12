@@ -278,7 +278,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
         _crashOpen = false;
         _onProfiles = true;
         _nav.Root();
-        _copy = null; _subject = null; _menu.Close();
+        _copy = null; _copyAsk = null; _subject = null; _menu.Close();
         FillProfiles();
         Changed(string.Empty);
     }
@@ -738,6 +738,13 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
     internal string? KnownErrorText(string code) => S["error." + code] is var text && text != "error." + code ? text : null;
 
     private void Changed([CallerMemberName] string? name = null)
+    {
+        Raise(name);
+        // owner 2026-11-12: PLAY's notice line is read from the mod notice, the crash and the play state (ShellViewModel.PlayNotice.cs)
+        if (name is not null && PlayNoticeInputs.Contains(name)) foreach (var notice in PlayNoticeOutputs) Raise(notice);
+    }
+
+    private void Raise(string? name)
     {
         if (PropertyChanged is not { } handler) return;
         if (UiProfiler is not { } profiler) { handler(this, new PropertyChangedEventArgs(name)); return; }

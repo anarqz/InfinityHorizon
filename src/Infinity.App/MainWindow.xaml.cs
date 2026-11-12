@@ -44,12 +44,6 @@ public partial class MainWindow : Window
                 System.Windows.Threading.DispatcherPriority.Loaded);
         };
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
-        // T-1111-AZIMUTH: the former-Noob notice sits under the PLAY buttons; whenever it comes on screen (PLAY opened with it) it is scrolled
-        // into view, the buttons staying above it: nothing is covered
-        OldNoobNotice.IsVisibleChanged += (_, e) =>
-        {
-            if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => OldNoobNotice.BringIntoView(), System.Windows.Threading.DispatcherPriority.ContextIdle);
-        };
         // Owner 2026-10-27: the Azimuth setup before sign-in takes the focus when it opens (controller-first: A chooses the folder).
         var azimuthFirstShown = false;
         vm.PropertyChanged += (_, _) =>
@@ -245,6 +239,49 @@ public partial class MainWindow : Window
 
     private void OnOldNoobNoticeClose(object sender, RoutedEventArgs e) => _vm.CloseOldNoobNotice();
 
+    // owner 2026-11-12: the former-Noob choice, START CAREER and a save copy's confirmation are centred popups. The keyboard lands on the
+    // choice that changes nothing (Not now, Cancel), so a stray Enter never copies; Escape is that choice.
+    private void OnOldNoobNoticeLater(object sender, RoutedEventArgs e) => _vm.PostponeOldNoobNotice();
+
+    private void OnOldNoobNoticeKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape || !_vm.Idle) return;
+        e.Handled = true;
+        if (_vm.OldNoobNoticeDone) _vm.CloseOldNoobNotice(); else _vm.PostponeOldNoobNotice();
+    }
+
+    private void OnOldNoobNoticeVisible(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => { if (OldNoobNoticeLater.IsVisible) OldNoobNoticeLater.Focus(); else OldNoobNoticeCloseButton.Focus(); },
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnPlayStartKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true; _vm.ClosePlayStart();
+    }
+
+    private void OnPlayStartVisible(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => PlayStartNotNow.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnCancelCopy(object sender, RoutedEventArgs e) => _vm.CancelCopy();
+
+    private void OnCopyConfirmKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape || !_vm.Idle) return;
+        e.Handled = true; _vm.CancelCopy();
+    }
+
+    private void OnCopyConfirmVisible(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => CopyCancelButton.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    // owner 2026-11-12: PLAY's notice line's one link (Close the game, Open Mods, the catalog's Try again, Review crash report)
+    private async void OnPlayNoticeAction(object sender, RoutedEventArgs e) => await _vm.GuardAsync("the PLAY notice's link", _vm.RunPlayNoticeActionAsync);
 
     // Owner 2026-11-08: the FRIENDS sidebar (header toggle)
     private void OnToggleFriends(object sender, RoutedEventArgs e) => _vm.ToggleFriends();
@@ -507,11 +544,7 @@ public partial class MainWindow : Window
 
     private async void OnPlay(object sender, RoutedEventArgs e) => await _vm.PlayAsync();
 
-    private void OnQuitGame(object sender, RoutedEventArgs e) => _vm.QuitGame();
-
     // OD-133: restore a career a fresh start moved aside on this PC
-    private async void OnOpenCareerRestore(object sender, RoutedEventArgs e) => await _vm.OpenCareerRestoreAsync();
-
     private void OnPickCareerRestore(object sender, RoutedEventArgs e) => _vm.PickCareerRestore((CareerRestoreRow)((FrameworkElement)sender).DataContext);
 
     private async void OnConfirmCareerRestore(object sender, RoutedEventArgs e) => await _vm.ConfirmCareerRestoreAsync();
@@ -823,7 +856,6 @@ public partial class MainWindow : Window
     }
 
     private void OnRevertIni(object sender, RoutedEventArgs e) => _vm.RevertIni();
-    private void OnReviewCrash(object sender, RoutedEventArgs e) => _vm.ReviewCrash();
     // OD-241: the crash screen's two buttons
     private void OnIgnoreCrash(object sender, RoutedEventArgs e) => _vm.IgnoreCrash();
     private async void OnGetCrashLogs(object sender, RoutedEventArgs e) => await _vm.GetCrashLogsAsync();

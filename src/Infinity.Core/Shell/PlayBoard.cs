@@ -182,6 +182,11 @@ public static class ProfileTools
     public const string OldCopy = "old-copy";
     /// <summary>An AZIMUTH row, an old Noob cloud save (<c>old-export:&lt;key&gt;</c>): export it to a file.</summary>
     public const string OldExport = "old-export";
+    /// <summary>
+    /// OD-133 on the chosen HARDCORE row only, while this PC holds a career a fresh start moved aside (owner 2026-11-12: it left PLAY, which
+    /// holds only the logo, the games, the notice line, the profiles and "manage profiles"): the restore's list, then its centred confirmation.
+    /// </summary>
+    public const string RestoreCareer = "restore-career";
 
 
     /// <summary>The profile card's tools, in the menu's order.</summary>

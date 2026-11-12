@@ -72,13 +72,16 @@ public partial class MainWindow
 
     /// <summary>The prompts that wait for the player (<see cref="ShellViewModel.AwaitingPlayer"/>) with their own panel: the visible one, or null.</summary>
     internal FrameworkElement? OpenPrompt() =>
-        new FrameworkElement[] { SaveConflictPrompt, FreshStartPrompt, RestoreWaitingPrompt, CareerRestorePrompt, SeedPrompt, TrustChangePrompt, AzimuthFirstRunOverlay, ModConfirmOverlay }
+        new FrameworkElement[] { SaveConflictPrompt, FreshStartPrompt, RestoreWaitingPrompt, CareerRestorePrompt, SeedPrompt, TrustChangePrompt, AzimuthFirstRunOverlay, ModConfirmOverlay, CopyConfirmOverlay, OldNoobNotice }
             .FirstOrDefault(p => p.IsVisible);
 
     /// <summary>Hotfix 3.1.2: the keyboard on the open prompt's first enabled button (its main choice), unless it is already inside it.</summary>
     private void FocusOpenPrompt()
     {
         if (_lockVm is not { AwaitingPlayer: true } vm || Locked(vm) || OpenPrompt() is not { } prompt || prompt.IsKeyboardFocusWithin) return;
+        // owner 2026-11-12: the popups put the keyboard on their choice that changes nothing (their IsVisibleChanged handlers)
+        if (ReferenceEquals(prompt, CopyConfirmOverlay)) { CopyCancelButton.Focus(); return; }
+        if (ReferenceEquals(prompt, OldNoobNotice)) { if (OldNoobNoticeLater.IsVisible) OldNoobNoticeLater.Focus(); else OldNoobNoticeCloseButton.Focus(); return; }
         if (FirstButton(prompt) is { } button) button.Focus();
     }
 

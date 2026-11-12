@@ -587,7 +587,6 @@
   "welcome.back": "Voltar",
   "beta.notice": "O Infinity ainda está em BETA e opera com capacidade limitada. Estamos testando com poucos jogadores para corrigir problemas mais rápido e aumentar gradualmente o limite de jogadores online. Tenha paciência e divirta-se.",
   "play.online": "JOGAR ONLINE",
-  "play.ready": "Sua próxima viagem começa aqui. Entre nos servidores e iniciaremos o jogo quando chegar a sua vez.",
   "play.setup_needed": "Configure seu jogo primeiro",
   "play.hook_stale_game_running": "O hook do Infinity na pasta do jogo precisa ser atualizado antes de jogar. Feche o jogo e aperte Jogar de novo.",
   "play.hook_stale_failed": "O hook do Infinity na pasta do jogo precisa ser atualizado, mas o launcher não conseguiu gravar nessa pasta (acesso negado, ou outro programa está com o arquivo aberto). Vá em Configurar e reinstale o hook, ou abra o launcher com permissão para alterar a pasta do jogo.",
@@ -1275,7 +1274,6 @@
   "sm.crumb.create": "Criar perfil",
   "sm.crumb.start": "Começar carreira",
   "sm.crumb.resolve": "Resolver",
-  "sm.crumb.copy": "Copiar",
   "sm.crumb.history": "Histórico",
   "sm.crumb.delete": "Excluir",
   "sm.crumb.help": "Help Sensei",
@@ -1647,5 +1645,10 @@
   "oldnotice.keep": "Manter o save do Azimuth",
   "oldnotice.kept": "O seu save do Azimuth de {game} foi mantido. Nada foi copiado; o seu save Noob antigo continua disponível em Perfis.",
   "oldnotice.not_recorded": "(Não foi possível guardar essa escolha neste PC, então o launcher pode perguntar de novo.)",
-  "oldnotice.close": "Fechar"
+  "oldnotice.close": "Fechar",
+  "oldnotice.later": "Agora não",
+  "play.notice_more": "+{count} outros avisos",
+  "play.crash_waiting": "O jogo travou ({code}). O relatório está esperando: pegue os logs ou ignore.",
+  "copyask.backup_first": "Antes, é feito um backup verificado do seu save atual do Azimuth; o caminho exato do backup aparece quando a cópia termina. O save de origem só é lido.",
+  "export.copy_from_cloud": "save Noob antigo de {name} na nuvem"
 }

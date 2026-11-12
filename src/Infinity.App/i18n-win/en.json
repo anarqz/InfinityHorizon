@@ -587,7 +587,6 @@
   "welcome.back": "Back",
   "beta.notice": "Infinity is still in BETA and running at limited capacity. We are testing with a small number of players so we can fix issues faster and gradually increase the online player limit. Be patient and have fun.",
   "play.online": "ONLINE PLAY",
-  "play.ready": "Your next drive starts here. Join the servers and we’ll launch the game when your place is ready.",
   "play.setup_needed": "Configure your game first",
   "play.hook_stale_game_running": "The Infinity hook in your game folder must be updated before you play. Close the game, then press Play again.",
   "play.hook_stale_failed": "The Infinity hook in your game folder must be updated, but the launcher could not write to that folder (access denied, or another program has the file open). Go to Configure and reinstall the hook, or run the launcher with permission to change the game folder.",
@@ -1275,7 +1274,6 @@
   "sm.crumb.create": "Create profile",
   "sm.crumb.start": "Start career",
   "sm.crumb.resolve": "Resolve",
-  "sm.crumb.copy": "Copy",
   "sm.crumb.history": "History",
   "sm.crumb.delete": "Delete",
   "sm.crumb.help": "Help Sensei",
@@ -1647,5 +1645,10 @@
   "oldnotice.keep": "Keep Azimuth's save",
   "oldnotice.kept": "Kept your {game} Azimuth save. Nothing was copied; your old Noob save stays available in Profiles.",
   "oldnotice.not_recorded": "(This choice could not be saved on this PC, so the launcher may ask again.)",
-  "oldnotice.close": "Close"
+  "oldnotice.close": "Close",
+  "oldnotice.later": "Not now",
+  "play.notice_more": "+{count} more",
+  "play.crash_waiting": "The game crashed ({code}). Its report is waiting: get the logs or ignore it.",
+  "copyask.backup_first": "Your current Azimuth save is backed up first (verified); the backup's exact path is shown when the copy is done. The save you copy from is only read.",
+  "export.copy_from_cloud": "old Noob cloud save of {name}"
 }

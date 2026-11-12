@@ -197,7 +197,6 @@ public sealed partial class ShellViewModel
         SavesScreen.Start when _startRow is null => SavesScreen.Home,
         SavesScreen.Delete when !ShowDeleteProfile => SavesScreen.Home,
         SavesScreen.Resolve when _subject is null => SavesScreen.Home,
-        SavesScreen.Copy when _copy is null => SavesScreen.Home,
         var s => s,
     };
 
@@ -210,7 +209,6 @@ public sealed partial class ShellViewModel
     public bool ShowSavesCreate => ShowSaveManager && SavesCurrent == SavesScreen.Create;
     public bool ShowSavesStart => ShowSaveManager && SavesCurrent == SavesScreen.Start;
     public bool ShowSavesResolve => ShowSaveManager && SavesCurrent == SavesScreen.Resolve;
-    public bool ShowSavesCopy => ShowSaveManager && SavesCurrent == SavesScreen.Copy;
     public bool ShowSavesPick => ShowSaveManager && SavesCurrent == SavesScreen.Pick;
     public bool ShowSavesHistory => ShowSaveManager && SavesCurrent == SavesScreen.History;
     public bool ShowSavesDelete => ShowSaveManager && SavesCurrent == SavesScreen.Delete;
@@ -243,7 +241,6 @@ public sealed partial class ShellViewModel
         {
             case SavesScreen.Start: CancelCareerStart(); return; // pops itself
             case SavesScreen.Delete: CancelDeleteProfile(); return; // pops itself
-            case SavesScreen.Copy: _copy = null; break;
         }
         if (!_nav.Back()) return;
         PruneSaves();
@@ -278,7 +275,7 @@ public sealed partial class ShellViewModel
     public void SavesHome()
     {
         _nav.Root();
-        _startRow = null; _copy = null; _subject = null; _menu.Close();
+        _startRow = null; _copy = null; _copyAsk = null; _subject = null; _menu.Close();
         FillSaveCards();
         ChangedSaves();
     }
@@ -631,6 +628,13 @@ public sealed partial class ShellViewModel
             };
             list.Add(blocked is not null ? action with { Enabled = false, Reason = blocked } : action);
         }
+        // OD-133 (owner 2026-11-12: off PLAY): the chosen HARDCORE profile's row of PLAY's game, while a career a fresh start moved aside is here
+        if (!otherGame && card?.Player.ProfileId == _gate.ProfileKey && ShowCareerRestoreEntry)
+        {
+            var at = list.FindIndex(a => a.Id == ProfileTools.DeleteCareer);
+            list.Insert(at >= 0 ? at : list.Count,
+                new MenuAction(ProfileTools.RestoreCareer, S["restore.entry"], CanRestoreCareer, CareerRestoreNote is { Length: > 0 } why ? why : null));
+        }
         return list;
     }
 
@@ -906,6 +910,9 @@ public sealed partial class ShellViewModel
             case ProfileTools.DeleteCareer:
                 AskDeleteProfile(row.Profile);
                 break;
+            case ProfileTools.RestoreCareer:
+                await OpenCareerRestoreAsync();
+                break;
         }
         ChangedSaves();
     }
@@ -930,7 +937,7 @@ public sealed partial class ShellViewModel
                 await OpenRestoreOriginalAsync();
                 break;
             case ProfileTools.OldCopy when old is not null:
-                await MoveOldSaveAsync(old);
+                AskMoveOldSave(old); // owner 2026-11-12: the copy's centred confirmation first
                 break;
             case ProfileTools.OldExport when old is not null:
                 ExportOldSave(old);
@@ -1102,9 +1109,94 @@ public sealed partial class ShellViewModel
     public string CopyTitle { get; private set; } = string.Empty;
     public string CopySub { get; private set; } = string.Empty;
     public string CopyNote { get; private set; } = string.Empty;
-    public bool CanConfirmCopy => _copy is not null && !_gameRunning && Idle;
+    public bool CanConfirmCopy => _copyAsk is not null && !_gameRunning && Idle;
     public string CopyBlockedText => _gameRunning ? GameRunningText : string.Empty;
-    public bool ShowCopyBlocked => _gameRunning && _copy is not null;
+    public bool ShowCopyBlocked => _gameRunning && _copyAsk is not null;
+
+    /// <summary>
+    /// Owner 2026-11-12 (first-hand, WINDOWS chat): every confirmation that copies, restores or replaces a save is a centred popup (title, what
+    /// is replaced, the backup line, Confirm / Cancel), never a page step or an inline panel: a HARDCORE save, a history entry, a cloud revision
+    /// or Azimuth's original into the Azimuth save (Copy and replace), "Use another save on this PC…" (a listed save or a picked folder) and an
+    /// old Noob cloud save's "Copy into my Azimuth save". Nothing is written before Confirm; the write then runs under the busy overlay.
+    /// </summary>
+    private sealed record CopyAsk(string ConfirmLabel, Func<Task> Run);
+
+    private CopyAsk? _copyAsk;
+
+    /// <summary>The save copy's confirmation popup (it waits behind the prompts of <see cref="PromptOpen"/>).</summary>
+    public bool ShowCopyConfirm => _copyAsk is not null && !PromptOpen;
+
+    public string CopyConfirmLabel => _copyAsk?.ConfirmLabel ?? S["sm.copy_confirm"];
+
+    /// <summary>Opens the confirmation popup: <paramref name="from"/> → the Azimuth save (<paramref name="to"/>), with its backup line.</summary>
+    private void AskCopy(string title, string sub, CompareSide from, CompareSide to, string note, string confirm, Func<Task> run)
+    {
+        RefreshGameRunning();
+        _menu.Close();
+        CopyTitle = title; CopySub = sub; CopyFromSide = from; CopyToSide = to; CopyNote = note;
+        _copyAsk = new CopyAsk(confirm, run);
+        Log("saves: copy confirmation shown: " + title);
+        ChangedSaves();
+    }
+
+    /// <summary>Cancel: the popup closes, nothing written.</summary>
+    public void CancelCopy()
+    {
+        if (_copyAsk is null) return;
+        _copyAsk = null; _copy = null;
+        Log("saves: copy confirmation cancelled");
+        ChangedSaves();
+    }
+
+    /// <summary>The Azimuth save of the current game as the "Replaced" side reads it (credits, modified, revision).</summary>
+    private List<CompareLine> AzimuthSideLines()
+    {
+        var c = SavesCulture;
+        var az = AzimuthSave();
+        return
+        [
+            new(S["sm.kv.credits"], az?.Credits?.ToString("N0", c) ?? S["sm.unknown"]),
+            new(S["sm.kv.modified"], az is null ? S["sm.slot.no_save"] : When(az.LastPlayedUtc)),
+            new(S["sm.kv.revision"], az is null ? S["sm.unknown"] : S.Format("sm.local_rev", ("n", az.Revision.Number.ToString(c)))),
+        ];
+    }
+
+    /// <summary>The confirmation of "Use another save on this PC…" for <paramref name="source"/> (a listed save or a picked folder).</summary>
+    private void AskUseOtherSave(GameDefinition game, SaveSource source, string title)
+    {
+        var c = SavesCulture;
+        var level = LocalLevels.Of(game, source.Save, _install?.Root);
+        var az = AzimuthSave();
+        var to = S["sm.azimuth_name"];
+        var fromLines = new List<CompareLine>
+        {
+            new(S["sm.kv.level"], level.Shown?.ToString("N0", c) ?? S["sm.unknown"]),
+            new(S["sm.kv.credits"], source.Save.Credits?.ToString("N0", c) ?? S["sm.unknown"], Up: source.Save.Credits > az?.Credits, Down: source.Save.Credits < az?.Credits),
+            new(S["sm.kv.modified"], When(source.Save.LastPlayedUtc)),
+        };
+        AskCopy(S.Format("sm.copy_title", ("from", title), ("to", to)), S.Format("sm.copy_sub", ("to", to)),
+            new CompareSide(S.Format("sm.copy_from", ("name", title)), string.Empty, false, fromLines),
+            new CompareSide(S.Format("sm.copy_replaced", ("name", to)), string.Empty, false, AzimuthSideLines()),
+            S["copyask.backup_first"], S["othersave.use"], async () => await CopyOtherSaveAsync(game, source, title));
+    }
+
+    /// <summary>The confirmation of an old Noob cloud save's "Copy into my Azimuth save" (the cloud head's numbers as the row lists them).</summary>
+    private void AskMoveOldSave(OldSaveRow row)
+    {
+        var c = SavesCulture;
+        var to = S["sm.azimuth_name"];
+        var from = row.Title;
+        var save = row.Save;
+        var fromLines = new List<CompareLine>
+        {
+            new(S["sm.kv.modified"], save.SavedAtUtc is { } at ? When(at) : S["sm.unknown"]),
+            new(S["sm.kv.revision"], save.Line is { } line ? line.Revision.ToString(c) : S["sm.unknown"]),
+        };
+        AskCopy(S.Format("sm.copy_title", ("from", from), ("to", to)), S.Format("sm.copy_sub", ("to", to)),
+            new CompareSide(S.Format("sm.copy_from", ("name", S.Format("export.copy_from_cloud", ("name", save.Gamertag)))), string.Empty, false, fromLines),
+            new CompareSide(S.Format("sm.copy_replaced", ("name", to)), string.Empty, false, AzimuthSideLines()),
+            S["copyask.backup_first"], S["sm.copy_confirm"], async () => await MoveOldSaveAsync(row));
+    }
 
     /// <summary>
     /// A HARDCORE profile's own save onto Azimuth's (as before OD-239), named by its mode, profile and folder in every label. Only a HARDCORE
@@ -1139,26 +1231,34 @@ public sealed partial class ShellViewModel
             fromLines.Add(new(S["sm.kv.modified"], source is null ? (plan.Entry is { } e ? When(e.Entry.At) : S["sm.unknown"]) : When(source.LastPlayedUtc)));
             fromLines.Add(new(S["sm.kv.revision"], source is null ? S["sm.unknown"] : S.Format("sm.local_rev", ("n", source.Revision.Number.ToString(c)))));
         }
-        var toLines = new List<CompareLine>
-        {
-            new(S["sm.kv.credits"], az?.Credits?.ToString("N0", c) ?? S["sm.unknown"]),
-            new(S["sm.kv.modified"], az is null ? S["sm.slot.no_save"] : When(az.LastPlayedUtc)),
-            new(S["sm.kv.revision"], az is null ? S["sm.unknown"] : S.Format("sm.local_rev", ("n", az.Revision.Number.ToString(c)))),
-        };
-        CopyFromSide = new CompareSide(S.Format("sm.copy_from", ("name", plan.FromName)), string.Empty, false, fromLines);
-        CopyToSide = new CompareSide(S.Format("sm.copy_replaced", ("name", to)), string.Empty, false, toLines);
-        CopyTitle = S.Format("sm.copy_title", ("from", plan.FromName), ("to", to));
-        CopySub = S.Format("sm.copy_sub", ("to", to));
-        CopyNote = S.Format("sm.copy_note", ("to", to));
-        SavesGo(SavesScreen.Copy);
+        // owner 2026-11-12: the comparison is the centred confirmation popup over the screen it was opened from (no Copy page)
+        AskCopy(S.Format("sm.copy_title", ("from", plan.FromName), ("to", to)), S.Format("sm.copy_sub", ("to", to)),
+            new CompareSide(S.Format("sm.copy_from", ("name", plan.FromName)), string.Empty, false, fromLines),
+            new CompareSide(S.Format("sm.copy_replaced", ("name", to)), string.Empty, false, AzimuthSideLines()),
+            S.Format("sm.copy_note", ("to", to)), S["sm.copy_confirm"], () => CopyPlanAsync(plan));
+    }
+
+    /// <summary>
+    /// The confirmation popup's Confirm: refused while the game runs (the popup stays, saying why); else it closes and its write runs (under the
+    /// busy overlay, the Azimuth save backed up first).
+    /// </summary>
+    public async Task ConfirmCopyAsync()
+    {
+        if (_copyAsk is not { } ask) return;
+        await RefreshGameRunningNowAsync();
+        if (_gameRunning) { Message = S["saves.game_running"]; ChangedSaves(); return; }
+        _copyAsk = null;
+        ChangedSaves();
+        Log("saves: copy confirmed");
+        await ask.Run();
+        _copy = null;
+        ChangedSaves();
     }
 
     /// <summary>"Copy and replace": Azimuth's save archived first (verified), then the copy; nothing is written when the archive fails.</summary>
-    public async Task ConfirmCopyAsync()
+    private async Task CopyPlanAsync(CopyPlan plan)
     {
-        if (_copy is not { } plan || SavesRootNow is not { } root) return;
-        await RefreshGameRunningNowAsync();
-        if (_gameRunning) { Message = S["saves.game_running"]; ChangedSaves(); return; }
+        if (SavesRootNow is not { } root) return;
         var fromWord = plan.From == SaveSlot.Azimuth ? "azimuth" : plan.From.ToString().ToLowerInvariant();
         await Run(S["busy.copying"], async () =>
         {
@@ -1518,7 +1618,7 @@ public sealed partial class ShellViewModel
         {
             nameof(SavesCurrent), nameof(ShowSaveManager), nameof(ShowPlainProfiles), nameof(ShowSavesHome), nameof(ShowSavesCreate), nameof(ShowSavesStart),
             nameof(ShowFloatingMenu),
-            nameof(ShowSavesResolve), nameof(ShowSavesCopy), nameof(ShowSavesPick), nameof(PickTitle), nameof(PickSub), nameof(PickEmpty), nameof(CanUseOtherSave),
+            nameof(ShowSavesResolve), nameof(ShowCopyConfirm), nameof(AwaitingPlayer), nameof(CopyConfirmLabel), nameof(ShowOldNoobNotice), nameof(ShowSavesPick), nameof(PickTitle), nameof(PickSub), nameof(PickEmpty), nameof(CanUseOtherSave),
             nameof(ShowSavesHistory), nameof(ShowSavesDelete),
             nameof(ShowSavesHelp), nameof(ShowSavesDone), nameof(ShowHelpLink), nameof(SavesCanGoBack), nameof(SavesTrail), nameof(SavesTrailLast),
             nameof(SavesSubtitle), nameof(ShowGameRunningNote), nameof(GameRunningText),
