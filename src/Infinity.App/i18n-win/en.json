@@ -813,6 +813,8 @@
   "mods.runtime_failed": "The mod session could not start or ended unexpectedly.",
   "mods.session_prepare": "Preparing the session database…",
   "mods.catalog_production": "Infinity's official mod catalog. Every download is checked against its listed hash.",
+  "mods.catalog_production_short": "Downloads hash-checked",
+  "mods.catalog_dev_short": "Development catalog",
   "mods.catalog_cached": "Offline: showing the last catalog loaded.",
   "mods.catalog_expired": "The catalog has expired. Installed mods keep working; new installs and updates wait for a fresh catalog.",
   "mods.catalog_count_signed": "{count} mods · signed catalog",

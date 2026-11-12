@@ -813,6 +813,8 @@
   "mods.runtime_failed": "A sessão de mods não iniciou ou terminou inesperadamente.",
   "mods.session_prepare": "Preparando o banco de dados da sessão…",
   "mods.catalog_production": "Catálogo oficial de mods do Infinity. Cada download é conferido com o hash informado.",
+  "mods.catalog_production_short": "Downloads conferidos por hash",
+  "mods.catalog_dev_short": "Catálogo de desenvolvimento",
   "mods.catalog_cached": "Offline: mostrando o último catálogo carregado.",
   "mods.catalog_expired": "O catálogo expirou. Os mods instalados continuam funcionando; novas instalações e atualizações aguardam um catálogo novo.",
   "mods.catalog_count_signed": "{count} mods · catálogo assinado",
