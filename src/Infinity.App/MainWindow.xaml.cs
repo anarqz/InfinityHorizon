@@ -702,6 +702,11 @@ public partial class MainWindow : Window
     // owner 2026-11-10: a card's click is awaited, and a failure is logged and said (never lost in a fire-and-forget task)
     private async void OnSelectMod(object sender, RoutedEventArgs e) { var card = (ModCard)((FrameworkElement)sender).DataContext; await _vm.GuardAsync("open a mod", () => _vm.SelectModAsync(card)); }
     private void OnSelectModsGame(object sender, RoutedEventArgs e) => _vm.SelectModsGame((GameCard)((FrameworkElement)sender).DataContext);
+    // Alex 2026-11-12: the Mods page's two views, and the Manual view's folder and row information
+    private void OnModsViewCatalog(object sender, RoutedEventArgs e) => _vm.SelectModsView(manual: false);
+    private void OnModsViewManual(object sender, RoutedEventArgs e) => _vm.SelectModsView(manual: true);
+    private void OnOpenManualModsFolder(object sender, RoutedEventArgs e) => _vm.OpenManualModsFolder();
+    private void OnManualModInformation(object sender, RoutedEventArgs e) => _vm.ShowManualModInformation((ExtraOptionsModItem)((FrameworkElement)sender).DataContext);
     private void OnEnableAllMods(object sender, RoutedEventArgs e) => _vm.AskToggleAllMods(enable: true);
     private void OnDisableAllMods(object sender, RoutedEventArgs e) => _vm.AskToggleAllMods(enable: false);
     private void OnModInformation(object sender, RoutedEventArgs e) => _vm.ShowModInformation((ModCard)((FrameworkElement)sender).DataContext);
