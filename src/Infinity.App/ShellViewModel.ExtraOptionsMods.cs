@@ -17,6 +17,8 @@ public sealed record ExtraOptionsModItem(string Folder, string Name, string Deta
     /// <summary>Owner 2026-10-28: a manual mod, once off, can be deleted from the mods folder (asked twice).</summary>
     public bool CanDelete { get; init; }
     public string DeleteLabel { get; init; } = "";
+    /// <summary>Alex 2026-11-12: the Manual view's ⓘ, all of the row in full (name, details with its folder, state, the online note).</summary>
+    public string Info { get; init; } = "";
 }
 
 public sealed partial class ShellViewModel
@@ -39,7 +41,7 @@ public sealed partial class ShellViewModel
     private async Task RefreshExtraOptionsModsAsync()
     {
         var game = CurrentGame.Id;
-        if (_install is not { } install || !ExtraOptionsLayout.HasModsFolder(game)) { ExtraOptionsModItems.Clear(); Changed(nameof(HasExtraOptionsMods)); return; }
+        if (_install is not { } install || !ExtraOptionsLayout.HasModsFolder(game)) { ExtraOptionsModItems.Clear(); Changed(nameof(HasExtraOptionsMods)); ChangedModsView(); return; }
         IReadOnlyList<ExtraOptionsMod> mods; IReadOnlyDictionary<string, ExtraOptionsModStatus> status;
         try { (mods, status) = await Task.Run(() => { var m = ExtraOptionsMods.Scan(install.Root, game); return (m, ExtraOptionsMods.ReadStatus(install.Root, m, game)); }); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
@@ -51,7 +53,7 @@ public sealed partial class ShellViewModel
         // a folder ExtraOptions loads nothing from (what an uninstalled mod's own settings leave behind) is no mod: not listed
         foreach (var mod in mods.Where(m => !managed.Contains(m.Folder) && (m.HasMedia || m.HasDatabase || m.HasStrings || m.Plugins > 0 || m.ManifestError is not null)))
             ExtraOptionsModItems.Add(Item(mod, mods, status) with { Game = game });
-        Changed(nameof(HasExtraOptionsMods)); Changed(nameof(ExtraOptionsModsFolder)); Changed(nameof(ExtraOptionsModsHint));
+        Changed(nameof(HasExtraOptionsMods)); Changed(nameof(ExtraOptionsModsFolder)); Changed(nameof(ExtraOptionsModsHint)); ChangedModsView();
     }
 
     /// <summary>
@@ -115,6 +117,7 @@ public sealed partial class ShellViewModel
             Toggle = S[mod.Enabled ? "mods.disable_action" : "mods.enable_action"],
             CanDelete = !mod.Enabled && ModsIdle,
             DeleteLabel = S[string.Equals(_deletingManualMod, mod.Folder, StringComparison.OrdinalIgnoreCase) ? "eomods.delete_confirm" : "eomods.delete"],
+            Info = string.Join("\n", mod.Name, details, text, S["eomods.manual_online"]),
         };
     }
 

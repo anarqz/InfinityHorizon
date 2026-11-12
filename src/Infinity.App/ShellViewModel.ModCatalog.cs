@@ -68,7 +68,7 @@ public sealed partial class ShellViewModel
         set
         {
             _modSearch = value ?? ""; Changed(); Changed(nameof(FilteredModCards)); Changed(nameof(FilteredModSetCards)); Changed(nameof(ModSearchEmpty));
-            Changed(nameof(NoMatchingMods));
+            Changed(nameof(NoMatchingMods)); Changed(nameof(FilteredExtraOptionsModItems)); Changed(nameof(NoMatchingManualMods));
         }
     }
     public bool ModSearchEmpty => string.IsNullOrWhiteSpace(_modSearch);
@@ -215,9 +215,6 @@ public sealed partial class ShellViewModel
 
     /// <summary>Owner 2026-11-10: the page names its game ("Mods · Forza Motorsport 5").</summary>
     public string ModsTitle => S.Format("mods.title_game", ("game", GameLabel));
-
-    /// <summary>Alex 2026-11-12: the toolbar's heading; the game chips name the game when there are two, otherwise the heading does.</summary>
-    public string ModsHeading => ShowModGameChips ? S["nav.mods"] : ModsTitle;
 
     /// <summary>The chosen game's mods folder, relative to Azimuth (<c>mods\Forza Motorsport 5</c>, OD-233).</summary>
     public string ModsGameFolder => ExtraOptionsLayout.HasModsFolder(CurrentGame.Id)
@@ -910,7 +907,7 @@ public sealed partial class ShellViewModel
         if (_selectedMod is { } selected) _selectedMod = ModCards.FirstOrDefault(card => card.Manifest.Id == selected.Manifest.Id);
         RefreshModSetCards(); // OD-232: the sets' packs, as rows of one card per set
         Changed(nameof(FilteredModCards)); Changed(nameof(NoMatchingMods)); Changed(nameof(SelectedMod)); Changed(nameof(SelectedModFiles)); Changed(nameof(HasModCards));
-        Changed(nameof(ModsToolbarInfo)); Changed(nameof(ModsToolbarTooltip));
+        Changed(nameof(ModsToolbarInfo)); Changed(nameof(ModsToolbarTooltip)); Changed(nameof(ShowModSearch));
     }
 
     /// <summary>The reviewed change of an update (M5): versions, file mappings added/removed/changed, settings added/removed; the player's settings stay.</summary>
