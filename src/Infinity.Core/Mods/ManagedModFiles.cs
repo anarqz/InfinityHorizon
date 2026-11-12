@@ -330,11 +330,9 @@ public sealed partial class ManagedModFiles
             var bytes = source();
             Store(bytes); // the mod's own bytes, kept for a later install after an uninstall (held)
             var afterBytes = bytes;
+            // the package's own INI, or one already there (such as the one an uninstall kept, OD-244): the player's settings stay
             if (file.Role == "config" && manifest.ConfigPath == file.Destination)
-            {
-                var ini = new ManifestIni(manifest, before is null ? bytes : File.ReadAllBytes(target));
-                ini.EnforceLocks(); afterBytes = ini.ToBytes();
-            }
+                afterBytes = SettingsBytes(manifest, before is null ? bytes : File.ReadAllBytes(target));
             var after = Store(afterBytes);
             var preserve = file.Role == "config" || file.Mode == "seed"; // seeded player files are the player's once written
             owned.Add(new(file.Root, file.Destination, Original(file, before), after, preserve));
@@ -355,9 +353,8 @@ public sealed partial class ManagedModFiles
         if (manifest.ConfigPath is null || owned.Any(f => f.Root == "azimuth" && f.Path == manifest.ConfigPath)) return;
         var config = Target("azimuth", manifest.ConfigPath!);
         var before = Current(config);
-        var iniBytes = before is null ? ManifestIni.Defaults(manifest) : File.ReadAllBytes(config);
-        var ini = new ManifestIni(manifest, iniBytes);
-        ini.EnforceLocks(); iniBytes = ini.ToBytes();
+        // an INI already there (an update's, or the one an uninstall kept, OD-244) is the player's; otherwise the defaults
+        var iniBytes = SettingsBytes(manifest, before is null ? null : File.ReadAllBytes(config));
         if (before is not null) Store(File.ReadAllBytes(config));
         if (before != ModManifest.Hash(iniBytes)) changes.Add(new("azimuth", manifest.ConfigPath!, before, Store(iniBytes)));
         owned.Add(new("azimuth", manifest.ConfigPath!, before, Store(iniBytes), true));
@@ -410,8 +407,7 @@ public sealed partial class ManagedModFiles
             && !changes.Any(c => c.Root == "azimuth" && c.Path == config))
         {
             // The player's settings are kept; the new manifest's locks still apply.
-            var ini = new ManifestIni(manifest, File.ReadAllBytes(Target("azimuth", config))); ini.EnforceLocks();
-            var locked = Store(ini.ToBytes());
+            var locked = Store(SettingsBytes(manifest, File.ReadAllBytes(Target("azimuth", config))));
             if (locked != currentIni) { Store(File.ReadAllBytes(Target("azimuth", config))); changes.Add(new("azimuth", config, currentIni, locked)); }
         }
         RejectOverlaps(owned, manifest.Id);
@@ -459,8 +455,7 @@ public sealed partial class ManagedModFiles
             enabled ? f.Before : f.After, enabled ? f.After : f.Before)).Where(c => c.Before != c.After).ToList();
         if (enabled && manifest.ConfigPath is { } config && Current(Target("azimuth", config)) is { } currentIni)
         {
-            var ini = new ManifestIni(manifest, File.ReadAllBytes(Target("azimuth", config))); ini.EnforceLocks();
-            var locked = Store(ini.ToBytes());
+            var locked = Store(SettingsBytes(manifest, File.ReadAllBytes(Target("azimuth", config))));
             if (locked != currentIni) { Store(File.ReadAllBytes(Target("azimuth", config))); changes.Add(new("azimuth", config, currentIni, locked)); }
         }
         Execute(new(manifest.Id + ".receipt.json", receipt with { Enabled = enabled }, changes), progress);
@@ -509,8 +504,8 @@ public sealed partial class ManagedModFiles
 
     /// <summary>
     /// Disables (when enabled) and forgets the installation: the receipt is archived, created empty
-    /// folders are removed, the settings file and backups stay (pruned later), and the mod's own files stay on this PC (held) for a
-    /// later install until <see cref="Purge"/>. Refuses drift.
+    /// folders are removed, the settings file (OD-244: kept in the mod's folder, which otherwise leaves) and backups stay (pruned later), and
+    /// the mod's own files stay on this PC (held) for a later install until <see cref="Purge"/>, which never touches the settings. Refuses drift.
     /// </summary>
     public void Uninstall(string id, IProgress<string>? progress = null)
     {
@@ -536,13 +531,38 @@ public sealed partial class ManagedModFiles
         var archive = Safe(BackupRoot, "uninstalled-" + id + "-" + Guid.NewGuid().ToString("N") + ".json");
         File.Move(ReceiptPath(id), archive);
         RemoveCreatedDirectories(receipt.CreatedDirectories ?? []);
-        // OD-127 (owner 2026-10-28): an ExtraOptions mod's folder leaves with it, with what the mod wrote there itself (its own settings),
-        // so nothing of it stays in mods\ to show as a manual mod
-        try { if (SnapshotFor(receipt) is var removed && ExtraOptionsMods.FolderOf(removed) is { } folder) ExtraOptionsMods.DeleteFolder(_azimuth, folder, removed.ModsGame); }
-        catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException or InvalidDataException) { }
+        // OD-244 (owner 2026-11-12, amends OD-127): an ExtraOptions mod's folder leaves with it, with what the mod wrote there itself,
+        // except its settings INI (its manifest's config.path, inside the folder): that stays, so a later install of the same mod reads the
+        // player's settings again (InstallFrom/AddConfig keep an INI they find). A folder left with only its INI loads nothing and is not
+        // listed as a manual mod.
+        try
+        {
+            if (SnapshotFor(receipt) is var removed && ExtraOptionsMods.FolderOf(removed) is { } folder)
+                ExtraOptionsMods.DeleteFolder(_azimuth, folder, removed.ModsGame, KeptSettings(removed, folder));
+        }
+        catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException) { }
         // review 3.1.2: an uninstalled mod leaves the Hardcore holds (nothing to give back)
         try { ForgetHeldLocked(SnapshotFor(receipt)); } catch (Exception e) when (e is ModException or IOException or UnauthorizedAccessException) { }
         ReconcileWineOverrides();
+    }
+
+    /// <summary>
+    /// OD-244: the settings INI an uninstall keeps in the mod's folder (relative to it), or none: a mod without <c>config.path</c>, or one
+    /// whose path is not inside its own folder (a retired manifest; nothing outside the folder is deleted anyway).
+    /// </summary>
+    private static string[] KeptSettings(ModManifest manifest, string folder) =>
+        manifest.ConfigPath is { } config && ExtraOptionsMods.FolderPrefix(manifest.ModsGame, folder) is var prefix
+            && config.StartsWith(prefix, StringComparison.Ordinal) && config.Length > prefix.Length ? [config[prefix.Length..]] : [];
+
+    /// <summary>
+    /// The player's settings INI, as an install, update or enable writes it: <paramref name="existing"/> (an INI already there, such as one an
+    /// uninstall kept, OD-244) or else the defaults, with the manifest's locks applied.
+    /// </summary>
+    private static byte[] SettingsBytes(ModManifest manifest, byte[]? existing)
+    {
+        var ini = new ManifestIni(manifest, existing ?? ManifestIni.Defaults(manifest));
+        ini.EnforceLocks();
+        return ini.ToBytes();
     }
 
     /// <summary>

@@ -140,21 +140,40 @@ public static class ExtraOptionsMods
     /// Owner 2026-10-28: removes one folder of <c>mods\</c> and its <c>loadorder.txt</c> line: a manually installed mod the player
     /// deletes, or what an uninstalled catalog mod still left in its own folder. Game closed (the caller's check). A linked folder,
     /// or anything linked inside it, is refused, so only the folder's own files go, through the one safe delete.
+    /// <para>
+    /// OD-244 (owner 2026-11-12): <paramref name="keep"/> names files inside the folder (relative to it, <c>/</c> separated; an uninstalled
+    /// catalog mod's settings INI) that stay, with the folders on the way to them; the folder then stays too. A path that leaves the folder
+    /// is refused.
+    /// </para>
     /// </summary>
-    public static void DeleteFolder(string azimuthRoot, string folder, string game = ModManifest.DefaultGame)
+    public static void DeleteFolder(string azimuthRoot, string folder, string game = ModManifest.DefaultGame, IReadOnlyCollection<string>? keep = null)
     {
         ArgumentNullException.ThrowIfNull(azimuthRoot);
         if (string.IsNullOrWhiteSpace(folder) || folder.IndexOfAny(['/', '\\', '\r', '\n', ':']) >= 0 || folder.StartsWith('.'))
             throw new ArgumentException("not a mod folder name", nameof(folder));
         var directory = new DirectoryInfo(Path.Combine(ModsDirectory(azimuthRoot, game), folder));
+        var kept = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var relative in keep ?? [])
+        {
+            var parts = relative.Replace('\\', '/').Split('/');
+            if (relative.Length == 0 || Path.IsPathRooted(relative) || relative.Contains(':', StringComparison.Ordinal)
+                || parts.Any(p => p.Length == 0 || p is "." or ".."))
+                throw new ArgumentException("a kept file must be inside the mod folder", nameof(keep));
+            var full = Path.GetFullPath(Path.Combine(directory.FullName, Path.Combine(parts)));
+            if (!full.StartsWith(Path.TrimEndingDirectorySeparator(directory.FullName) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("a kept file must be inside the mod folder", nameof(keep));
+            kept.Add(full);
+        }
         if (directory.Exists)
         {
             var everything = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 };
             if (directory.LinkTarget is not null || directory.EnumerateFileSystemInfos("*", everything).Any(i => i.LinkTarget is not null))
                 throw new IOException("a linked mod folder is not deleted");
-            foreach (var file in directory.EnumerateFiles("*", everything).ToList()) ManagedModFiles.RemoveFile(file.FullName);
-            foreach (var inner in directory.EnumerateDirectories("*", everything).OrderByDescending(d => d.FullName.Length).ToList()) inner.Delete();
-            directory.Delete();
+            foreach (var file in directory.EnumerateFiles("*", everything).Where(f => !kept.Contains(f.FullName)).ToList()) ManagedModFiles.RemoveFile(file.FullName);
+            // a folder on the way to a kept file is not empty, so it stays
+            foreach (var inner in directory.EnumerateDirectories("*", everything).OrderByDescending(d => d.FullName.Length).ToList())
+                if (!inner.EnumerateFileSystemInfos().Any()) inner.Delete();
+            if (!directory.EnumerateFileSystemInfos().Any()) directory.Delete();
         }
         var order = ReadLoadOrder(azimuthRoot, game);
         if (order.Lines.RemoveAll(l => Entry(l) is { } e && e.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase)) > 0) WriteLoadOrder(azimuthRoot, order, game);
