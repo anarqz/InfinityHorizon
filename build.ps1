@@ -25,7 +25,7 @@ $profile = if ($Production) { 'true' } else { 'false' }
 New-Item -ItemType Directory -Force $out, "$out/hook", "$out/overlay", "$out/licenses" | Out-Null
 
 # An existing signature must never survive a rebuild, including a switch to production mode.
-foreach ($file in @("$out/mod/infinity_mod.dll.sig", "$out/mod/infinity-mod-prepare.exe.sig", "$out/infinity.exe.sig", "$out/infinity-updater.exe.sig", "$out/hook/infinity.dll.sig", "$out/overlay/infinity-overlay.dll.sig", "$out/worlds.exe", "$out/worlds.exe.sig", "$out/development-key.txt", "$out/SHA256SUMS", "$out/SHA256SUMS.sig")) {
+foreach ($file in @("$out/infinity.exe.sig", "$out/infinity-updater.exe.sig", "$out/hook/infinity.dll.sig", "$out/overlay/infinity-overlay.dll.sig", "$out/worlds.exe", "$out/worlds.exe.sig", "$out/development-key.txt", "$out/SHA256SUMS", "$out/SHA256SUMS.sig")) {
     if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
 }
 
@@ -53,13 +53,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Hook build failed' }
 & "$root/native/overlay/build.ps1" -Release
 Copy-Item -LiteralPath "$root/native/overlay/build/infinity-overlay.dll" -Destination "$out/overlay/infinity-overlay.dll" -Force
 
-# The native mod runtime and its helper ship in both profiles (OD-112); a production build leaves them
-# unsigned for the maintainer's release signature ("fi-mod-runtime-v1 " line), like the other binaries.
-& "$root/native/mod/build.ps1"
-if ($LASTEXITCODE -ne 0) { throw "Mod runtime build failed" }
-New-Item -ItemType Directory -Force "$out/mod" | Out-Null
-foreach ($name in @('infinity_mod.dll', 'infinity-mod-prepare.exe')) { Copy-Item -LiteralPath "$root/native/mod/build/$name" -Destination "$out/mod/$name" -Force }
-
 if (!$Production) {
     & dotnet build "$root/tools/DevSign/DevSign.csproj" -c Release --nologo
     if ($LASTEXITCODE -ne 0) { throw 'Development signer build failed' }
@@ -72,10 +65,6 @@ if (!$Production) {
     if ($LASTEXITCODE -ne 0) { throw 'Hook development signing failed' }
     & dotnet $signer sign "$out/overlay/infinity-overlay.dll"
     if ($LASTEXITCODE -ne 0) { throw 'Overlay development signing failed' }
-    foreach ($binary in @("$out/mod/infinity_mod.dll", "$out/mod/infinity-mod-prepare.exe")) {
-        & dotnet $signer sign-mod $binary
-        if ($LASTEXITCODE -ne 0) { throw 'Mod host development signing failed' }
-    }
     $key = (& dotnet $signer key).Trim()
     if ($LASTEXITCODE -ne 0 -or $key -notmatch '^[a-f0-9]{64}$') { throw 'Development public key unavailable' }
     [IO.File]::WriteAllText("$out/development-key.txt", $key)
@@ -85,11 +74,6 @@ $licenses = @{
     'licenses/BouncyCastle-LICENSE.md' = 'licenses/BouncyCastle-LICENSE.md';
     'licenses/fh2-mods-LICENSE.txt' = 'licenses/fh2-mods-LICENSE.txt';
     'native/hook/NOTICE.md' = 'licenses/Hook-NOTICE.md';
-    'native/mod/third_party/sqlite/VERSION.txt' = 'licenses/SQLite-VERSION.txt';
-    'native/mod/NOTICE.md' = 'licenses/Mod-NOTICE.md';
-    'native/mod/LICENSE-SDK.txt' = 'licenses/Mod-SDK-LICENSE.txt';
-    'native/mod/licenses/FH2-hooks-MIT.txt' = 'licenses/FH2-hooks-MIT.txt';
-    'native/mod/third_party/minhook/LICENSE.txt' = 'licenses/Mod-MinHook-LICENSE.txt';
     'native/overlay/third_party/imgui/LICENSE.txt' = 'licenses/ImGui-LICENSE.txt';
     'native/overlay/third_party/minhook/LICENSE.txt' = 'licenses/MinHook-LICENSE.txt';
     'native/overlay/third_party/fonts/Selawik-LICENSE.txt' = 'licenses/Selawik-LICENSE.txt';

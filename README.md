@@ -42,8 +42,7 @@ existing clone, run `git submodule update --init native/extraoptions` once. The 
 Infinity's patches to a copy of it with `git apply`, so Git must be on `PATH`.
 
 The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
-`hook/infinity.dll`, `overlay/infinity-overlay.dll`, `mod/infinity_mod.dll`,
-`mod/infinity-mod-prepare.exe`, their development signatures,
+`hook/infinity.dll`, `overlay/infinity-overlay.dll`, their development signatures,
 English/pt-BR catalogs and license notices. No private repository or game installation is needed
 to compile. Build just the managed projects with `dotnet build Infinity.sln -c Release`.
 
@@ -112,12 +111,11 @@ writes them:
 Code: `src/Infinity.Core/Saves/` (`AzimuthSaves`, `CloudSaveFiles`, `CloudSaves`, `SessionSaves`,
 `SaveSyncStore`).
 
-## Native mods (development)
+## Mods
 
-The launcher reads mod packages, dependencies and settings from manifests. Compatible native
-mods use the MIT headers in `native/mod/include/`. The development runtime supports offline
-initialization and startup SQLite sessions with launcher-managed restoration. Production
-catalog admission, live database updates and online lobby enforcement are not available.
+The launcher installs ExtraOptions mods: one folder `<Azimuth>\mods\<game>\<id>\` with its own
+`mod.json`, described by a catalog manifest (packages, dependencies, settings). ExtraOptions loads
+their content and, through its PluginLoader, their plugins; the launcher has no mod runtime of its own.
 
 ## License
 

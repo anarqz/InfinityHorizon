@@ -11,13 +11,6 @@ public static class ReleaseSignature
     public const long MaxFileBytes = 512L * 1024 * 1024;
 
     /// <summary>
-    /// The native mod runtime and its helper (<c>mod/</c>): <c>"fi-mod-runtime-v1 " + SHA-256 lowercase hex</c>,
-    /// the line the hook verifies before it loads the runtime (native/hook mod_host.c, sign.h). Its own domain, so a
-    /// runtime signature never stands for a hook update and the other way round.
-    /// </summary>
-    public const string ModRuntimePrefix = "fi-mod-runtime-v1 ";
-
-    /// <summary>
     /// The line a release binary's <c>.sig</c> signs: <c>"fh2online-update-v1 " + SHA-256 lowercase hex</c>, the hook's own
     /// update line (<c>HookInstaller.SignPrefix</c> is this constant).
     /// </summary>

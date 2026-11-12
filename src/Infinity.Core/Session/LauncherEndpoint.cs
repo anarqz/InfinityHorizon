@@ -45,9 +45,6 @@ public abstract record EndpointEvent
     /// <summary>Frame 0x13 from the hook.</summary>
     public sealed record Capture(byte What, bool Ok) : EndpointEvent;
 
-    /// <summary>Frame 0x1b from the hook (N-H2): what the native mod runtime initialized for this launch.</summary>
-    public sealed record ModsReported(Frame.ModsReport Report) : EndpointEvent;
-
     /// <summary>Frame 0x1f from the hook (CR-L40): FREE ROAM ONLINE waits for <see cref="Frame.FreeRoamReady"/> with this nonce.</summary>
     public sealed record FreeRoamNeeded(uint Nonce, byte Kind = Matchmaking.FreeRoamKind.FreeRoam) : EndpointEvent;
 
@@ -174,7 +171,6 @@ public sealed class LauncherEndpoint
             Frame.Event e => new EndpointEvent.HookEvent(e.Kind, e.Detail),
             Frame.Bye b => new EndpointEvent.Closed(b.Reason),
             Frame.Capture c => new EndpointEvent.Capture(c.What, c.Ok),
-            Frame.ModsReport m => new EndpointEvent.ModsReported(m),
             Frame.FreeRoamNeed f => new EndpointEvent.FreeRoamNeeded(f.Nonce, f.Kind),
             Frame.Progress p => new EndpointEvent.ProgressReported(p.Level, p.Credits),
             Frame.Car c => new EndpointEvent.CarChanged(c.CarKey),

@@ -57,14 +57,8 @@ public abstract record ExitDisposition
 public sealed record LaunchPlan(string Program, IReadOnlyList<string> Args, string WorkingDirectory, IReadOnlyList<(string Name, string Value)> EnvSet, IReadOnlyList<string> EnvRemove)
 {
     /// <summary>
-    /// The retired native mod runtime's plan handoff (OD-113; OD-232): the hook still reads these names, and no launch sets them, so an
-    /// inherited one (a shell, Steam launch options) never reaches the game.
-    /// </summary>
-    public static IReadOnlyList<string> RetiredModPlanNames { get; } = ["FI_MOD_PLAN", "FI_MOD_PLAN_HASH", "FI_MOD_RUNTIME", "FI_MOD_RUNTIME_HASH"];
-
-    /// <summary>
     /// The child's whole environment (ORCHESTRATOR §1.2 step 2): <paramref name="inherited"/> plus
-    /// <see cref="EnvSet"/> minus <see cref="EnvRemove"/> and <see cref="RetiredModPlanNames"/>. Names compare case-insensitively (on
+    /// <see cref="EnvSet"/> minus <see cref="EnvRemove"/>. Names compare case-insensitively (on
     /// Windows <c>Path</c> and <c>PATH</c> are one variable), the last value wins, <c>=C:</c>
     /// per-drive entries and empty names are dropped, sorted by upper-cased name as
     /// <c>CreateProcessW</c> wants.
@@ -80,7 +74,6 @@ public sealed record LaunchPlan(string Program, IReadOnlyList<string> Args, stri
                 vars[name.ToUpperInvariant()] = (name, value);
             }
         }
-        foreach (var name in RetiredModPlanNames) vars.Remove(name.ToUpperInvariant());
         foreach (var name in EnvRemove)
         {
             vars.Remove(name.ToUpperInvariant());
