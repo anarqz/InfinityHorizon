@@ -189,12 +189,35 @@ public sealed partial class ShellViewModel
         : CatalogExpired ? S["mods.catalog_expired"] : DevelopmentMods ? S["mods.catalog_dev"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"]
         : _catalog is { Cached: true } ? S["mods.catalog_cached"] : S["mods.catalog_production"]);
     public string ModCatalogSummary => S.Format((_catalog is { Trusted: true } ? "mods.catalog_count_official" : "mods.catalog_count") + (ModCards.Count == 1 ? "_one" : ""),
-        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture))) + (_catalogFailure is { } failure ? " · " + failure : "")
+        ("count", ModCards.Count.ToString(CultureInfo.CurrentCulture)))
         + (ModsReading ? " · " + S["jobs.mods_read"] : "");
     public string ModsSubtitle => S[_catalogLoaded ? "mods.catalog_subtitle" : "mods.subtitle"];
 
+    /// <summary>
+    /// Alex 2026-11-12 (Mods revamp): a catalog state the player must read (a failed or not loaded catalog, an expired one, the offline
+    /// copy) stays in full above the mods, never only in the toolbar's tooltip; empty for the routine states.
+    /// </summary>
+    public string ModCatalogAlert => _catalogFailure ?? (!_catalogLoaded ? (_catalogLoading ? "" : S["mods.catalog_unloaded"])
+        : CatalogExpired ? S["mods.catalog_expired"] : _catalog is { Cached: true } && !DevelopmentMods && _catalog.Trusted ? S["mods.catalog_cached"] : "");
+    public bool HasModCatalogAlert => ModCatalogAlert.Length > 0;
+
+    /// <summary>The routine catalog state, short, for the toolbar (the full sentence is its tooltip); empty while an alert says it in full.</summary>
+    private string ModCatalogStatusShort => HasModCatalogAlert ? "" : !_catalogLoaded ? S["mods.progress.catalog"]
+        : DevelopmentMods ? S["mods.catalog_dev_short"] : _catalog is { Trusted: false } ? S["catalog.unofficial_short"] : S["mods.catalog_production_short"];
+
+    /// <summary>
+    /// Alex 2026-11-12: the page's static information in one muted line at the right of the toolbar, most useful first (the count and catalog,
+    /// the mods folder, the hash check), so a narrow window trims the least useful end; <see cref="ModsToolbarTooltip"/> has all of it.
+    /// </summary>
+    public string ModsToolbarInfo => string.Join(" · ", new[] { ModCatalogSummary, ModsGameFolder, ModCatalogStatusShort }.Where(s => s.Length > 0));
+    public string ModsToolbarTooltip => string.Join("\n", new[] { ModCatalogSummary, ModsGameFolder, ExtraOptionsModsFolder, HasModCatalogAlert ? "" : ModCatalogStatus }
+        .Where(s => s.Length > 0));
+
     /// <summary>Owner 2026-11-10: the page names its game ("Mods · Forza Motorsport 5").</summary>
     public string ModsTitle => S.Format("mods.title_game", ("game", GameLabel));
+
+    /// <summary>Alex 2026-11-12: the toolbar's heading; the game chips name the game when there are two, otherwise the heading does.</summary>
+    public string ModsHeading => ShowModGameChips ? S["nav.mods"] : ModsTitle;
 
     /// <summary>The chosen game's mods folder, relative to Azimuth (<c>mods\Forza Motorsport 5</c>, OD-233).</summary>
     public string ModsGameFolder => ExtraOptionsLayout.HasModsFolder(CurrentGame.Id)
@@ -579,7 +602,7 @@ public sealed partial class ShellViewModel
     private async Task ModReadLoopAsync()
     {
         _modReadRunning = true; _modReadProgress = (0, 0);
-        Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsReadingText)); Changed(nameof(ModsReadingHasProgress));
+        Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsToolbarInfo)); Changed(nameof(ModsToolbarTooltip)); Changed(nameof(ModsReadingText)); Changed(nameof(ModsReadingHasProgress));
         TaskCompletionSource? toastDone = null;
         try
         {
@@ -610,7 +633,7 @@ public sealed partial class ShellViewModel
             // every end (done, failed, superseded by nothing left to read): the toast and the page's progress card go away
             _modReadRunning = false; _modReadToast = null; _modReadProgress = (0, 0);
             toastDone?.TrySetResult();
-            Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsReadingText));
+            Changed(nameof(ModsReading)); Changed(nameof(ModCatalogSummary)); Changed(nameof(ModsToolbarInfo)); Changed(nameof(ModsToolbarTooltip)); Changed(nameof(ModsReadingText));
             Changed(nameof(ModsReadingHasProgress)); Changed(nameof(ModsReadingIndeterminate)); Changed(nameof(ModsReadingPercent));
         }
     }
@@ -887,6 +910,7 @@ public sealed partial class ShellViewModel
         if (_selectedMod is { } selected) _selectedMod = ModCards.FirstOrDefault(card => card.Manifest.Id == selected.Manifest.Id);
         RefreshModSetCards(); // OD-232: the sets' packs, as rows of one card per set
         Changed(nameof(FilteredModCards)); Changed(nameof(NoMatchingMods)); Changed(nameof(SelectedMod)); Changed(nameof(SelectedModFiles)); Changed(nameof(HasModCards));
+        Changed(nameof(ModsToolbarInfo)); Changed(nameof(ModsToolbarTooltip));
     }
 
     /// <summary>The reviewed change of an update (M5): versions, file mappings added/removed/changed, settings added/removed; the player's settings stay.</summary>
