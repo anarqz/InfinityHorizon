@@ -80,12 +80,12 @@ public sealed partial class ShellViewModel
     /// "Copy into my Azimuth save": refused while the game runs; under the busy overlay, the whole Azimuth save of the row's game is backed up
     /// (dated, verified), then the old save is installed onto it. The result names the backup's exact path; the source is never changed.
     /// </summary>
-    internal async Task MoveOldSaveAsync(OldSaveRow row)
+    internal async Task<OldSaveMoveOutcome?> MoveOldSaveAsync(OldSaveRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (_install is not { } install || GameOf(row.Save.Game) is not { } game) { Message = S["play.setup_needed"]; return; }
+        if (_install is not { } install || GameOf(row.Save.Game) is not { } game) { Message = S["play.setup_needed"]; return null; }
         await RefreshGameRunningNowAsync();
-        if (MoveGameRunning()) { Message = S["saves.game_running"]; return; }
+        if (MoveGameRunning()) { Message = S["saves.game_running"]; return OldSaveMoveOutcome.GameRunning; }
         var save = row.Save;
         var savesRoot = AzimuthSaves.SavesRoot(install.Root, game);
         // OD-239 BUG A: the HARDCORE XUIDs read again now (this PC's profiles and the cached /me) and refused before anything is read
@@ -103,8 +103,9 @@ public sealed partial class ShellViewModel
             || (_session?.Info.Services?.Saves is not { } origin || !Uri.TryCreate(origin, UriKind.Absolute, out savesOrigin)))
         {
             Message = S["oldsave.failed_unreachable"];
-            return;
+            return null;
         }
+        OldSaveMoveOutcome? outcome = null;
         await Run(S["busy.moving_old_save"], async () =>
         {
             OldSaveMoveResult result;
@@ -122,6 +123,7 @@ public sealed partial class ShellViewModel
                 SetOldSaveResult(S["oldsave.failed_unreachable"]);
                 return;
             }
+            outcome = result.Outcome;
             Log($"saves: old Noob save {save.Key} → Azimuth {OutcomeWord(result.Outcome)} r{result.Revision} {result.Code}");
             SetOldSaveResult(result.Outcome switch
             {
@@ -139,6 +141,7 @@ public sealed partial class ShellViewModel
         await RefreshOldSavesAsync();
         FillSaveCards();
         FillPlayBoard(); // PLAY AZIMUTH reads the Azimuth save again (the cached scan was invalidated)
+        return outcome;
     }
 
     /// <summary>The result under the Profiles cards, and the status line.</summary>

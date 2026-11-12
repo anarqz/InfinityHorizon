@@ -138,11 +138,11 @@ public sealed partial class ShellViewModel
     /// Refused while the game runs; under the busy overlay, the Azimuth save backed up (verified) and <paramref name="source"/> copied onto it.
     /// The result names the backup's exact path; the source is never changed.
     /// </summary>
-    private async Task CopyOtherSaveAsync(GameDefinition game, SaveSource source, string title)
+    private async Task<OldSaveMoveOutcome?> CopyOtherSaveAsync(GameDefinition game, SaveSource source, string title)
     {
-        if (_install is not { } install) { Message = S["play.setup_needed"]; return; }
+        if (_install is not { } install) { Message = S["play.setup_needed"]; return null; }
         await RefreshGameRunningNowAsync();
-        if (MoveGameRunning()) { Message = S["saves.game_running"]; ChangedSaves(); return; }
+        if (MoveGameRunning()) { Message = S["saves.game_running"]; ChangedSaves(); return OldSaveMoveOutcome.GameRunning; }
         var mover = new OldSaveMove(AzimuthSaves.SavesRoot(install.Root, game), new LocalHistory(_stateRoot, game, Version), MoveGameRunning, new HashSet<ulong>());
         var profile = source.Save.Xuid is { } x && source.Kind is SaveSourceKind.Hardcore or SaveSourceKind.OldNoob
             ? new HistoryProfile(x.ToString(System.Globalization.CultureInfo.InvariantCulture), source.Gamertag ?? string.Empty, source.Kind == SaveSourceKind.Hardcore ? "hardcore" : "noob")
@@ -150,9 +150,11 @@ public sealed partial class ShellViewModel
         // the backup's reason names the source in both languages ("Before copying HARDCORE · Hank into the Azimuth save")
         var reason = new HistoryReason(StringsIn("en").Format("othersave.reason", ("source", SaveSources.Title(StringsIn("en"), source))),
             StringsIn("pt-BR").Format("othersave.reason", ("source", SaveSources.Title(StringsIn("pt-BR"), source))));
+        OldSaveMoveOutcome? outcome = null;
         await Run(S["busy.using_other_save"], async () =>
         {
             var result = await Task.Run(() => mover.CopyFrom(source, game.Saves, path => Log("saves: Azimuth save backed up before the copy: " + path), profile, reason));
+            outcome = result.Outcome;
             Log($"saves: other {game.Id} save {source.Key} ({source.Kind}) → Azimuth {OutcomeWord(result.Outcome)} r{result.Revision} {result.Code}");
             SetOldSaveResult(result.Outcome switch
             {
@@ -169,5 +171,6 @@ public sealed partial class ShellViewModel
         });
         SavesHome();
         FillPlayBoard(); // PLAY AZIMUTH reads the Azimuth save again
+        return outcome;
     }
 }

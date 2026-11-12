@@ -44,6 +44,12 @@ public partial class MainWindow : Window
                 System.Windows.Threading.DispatcherPriority.Loaded);
         };
         vm.PropertyChanged += (_, _) => { if (vm.OnlineServicePaused) { PasswordBox.Clear(); DeletionPasswordBox.Clear(); } };
+        // T-1111-AZIMUTH: the former-Noob notice sits under the PLAY buttons; whenever it comes on screen (PLAY opened with it) it is scrolled
+        // into view, the buttons staying above it: nothing is covered
+        OldNoobNotice.IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => OldNoobNotice.BringIntoView(), System.Windows.Threading.DispatcherPriority.ContextIdle);
+        };
         // Owner 2026-10-27: the Azimuth setup before sign-in takes the focus when it opens (controller-first: A chooses the folder).
         var azimuthFirstShown = false;
         vm.PropertyChanged += (_, _) =>
@@ -225,6 +231,19 @@ public partial class MainWindow : Window
     private void OnClosePlayStart(object sender, RoutedEventArgs e) => _vm.ClosePlayStart();
 
     private void OnNavProfiles(object sender, RoutedEventArgs e) => _vm.OpenProfiles();
+
+    // T-1111-AZIMUTH: the former-Noob notice on PLAY (one choice per game, then Close)
+    private async void OnOldNoobNoticeCopy(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is OldNoobNoticeRow row) await _vm.CopyNoobSaveAsync(row);
+    }
+
+    private void OnOldNoobNoticeKeep(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is OldNoobNoticeRow row) _vm.KeepAzimuthSave(row);
+    }
+
+    private void OnOldNoobNoticeClose(object sender, RoutedEventArgs e) => _vm.CloseOldNoobNotice();
 
 
     // Owner 2026-11-08: the FRIENDS sidebar (header toggle)

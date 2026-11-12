@@ -1633,5 +1633,19 @@
   "play.azimuth_pick_name": "Pick your Azimuth gamertag once, then PLAY AZIMUTH plays this PC's Azimuth save.",
   "play.azimuth_own_name": "Plays this PC's Azimuth save as {name}.",
   "profiles.azimuth_identity_made": "Your Azimuth gamertag is {name}. PLAY AZIMUTH plays this PC's Azimuth save under it.",
-  "profiles.azimuth_identity_exists": "Your account already has its Azimuth gamertag, so no second one is made. PLAY AZIMUTH plays this PC's Azimuth save under it."
+  "profiles.azimuth_identity_exists": "Your account already has its Azimuth gamertag, so no second one is made. PLAY AZIMUTH plays this PC's Azimuth save under it.",
+  "startup.checking_old_saves": "Checking your old Noob saves…",
+  "oldnotice.title": "Noob profiles are now Azimuth",
+  "oldnotice.body": "PLAY AZIMUTH uses this PC's own Azimuth save. Your old Noob save is kept. Copy it into your Azimuth save? Your current Azimuth save is backed up first.",
+  "oldnotice.game_pc": "{game} · old Noob save of {name}, on this PC",
+  "oldnotice.game_cloud": "{game} · old Noob cloud save of {name}",
+  "oldnotice.old": "Old Noob save: {fields}",
+  "oldnotice.azimuth": "Azimuth save now: {fields}",
+  "oldnotice.azimuth_none": "Azimuth save now: none on this PC yet",
+  "oldnotice.saved": "saved {when}",
+  "oldnotice.copy": "Copy my Noob save",
+  "oldnotice.keep": "Keep Azimuth's save",
+  "oldnotice.kept": "Kept your {game} Azimuth save. Nothing was copied; your old Noob save stays available in Profiles.",
+  "oldnotice.not_recorded": "(This choice could not be saved on this PC, so the launcher may ask again.)",
+  "oldnotice.close": "Close"
 }

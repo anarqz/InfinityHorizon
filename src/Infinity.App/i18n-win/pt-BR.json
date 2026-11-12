@@ -1633,5 +1633,19 @@
   "play.azimuth_pick_name": "Escolha o seu gamertag do Azimuth uma vez, e JOGAR AZIMUTH joga o save do Azimuth deste PC.",
   "play.azimuth_own_name": "Joga o save do Azimuth deste PC como {name}.",
   "profiles.azimuth_identity_made": "O seu gamertag do Azimuth é {name}. JOGAR AZIMUTH joga o save do Azimuth deste PC com ele.",
-  "profiles.azimuth_identity_exists": "A sua conta já tem o seu gamertag do Azimuth, então nenhum segundo é criado. JOGAR AZIMUTH joga o save do Azimuth deste PC com ele."
+  "profiles.azimuth_identity_exists": "A sua conta já tem o seu gamertag do Azimuth, então nenhum segundo é criado. JOGAR AZIMUTH joga o save do Azimuth deste PC com ele.",
+  "startup.checking_old_saves": "Verificando os seus saves Noob antigos…",
+  "oldnotice.title": "Perfis Noob agora são Azimuth",
+  "oldnotice.body": "JOGAR AZIMUTH usa o próprio save do Azimuth deste PC. O seu save Noob antigo foi mantido. Copiar ele para o seu save do Azimuth? Antes, é feito um backup do seu save atual do Azimuth.",
+  "oldnotice.game_pc": "{game} · save Noob antigo de {name}, neste PC",
+  "oldnotice.game_cloud": "{game} · save Noob antigo de {name}, na nuvem",
+  "oldnotice.old": "Save Noob antigo: {fields}",
+  "oldnotice.azimuth": "Save do Azimuth agora: {fields}",
+  "oldnotice.azimuth_none": "Save do Azimuth agora: nenhum neste PC ainda",
+  "oldnotice.saved": "salvo {when}",
+  "oldnotice.copy": "Copiar meu save Noob",
+  "oldnotice.keep": "Manter o save do Azimuth",
+  "oldnotice.kept": "O seu save do Azimuth de {game} foi mantido. Nada foi copiado; o seu save Noob antigo continua disponível em Perfis.",
+  "oldnotice.not_recorded": "(Não foi possível guardar essa escolha neste PC, então o launcher pode perguntar de novo.)",
+  "oldnotice.close": "Fechar"
 }
