@@ -2029,20 +2029,51 @@
             <DockPanel Grid.Column="0" Margin="0,0,18,0">
               <!-- Alex 2026-11-12 (Mods revamp): one slim toolbar row (the heading, the game chips, the page's buttons; the static information
                    muted at its right, trimmed first on a narrow window, all of it in the tooltip), the search on the next row, then the mods. -->
-              <Border DockPanel.Dock="Top" Style="{StaticResource Card}" Padding="12,6" CornerRadius="10" Margin="0,0,0,10">
-                <Grid>
+              <Border DockPanel.Dock="Top" Style="{StaticResource Card}" Padding="8,5" CornerRadius="10" Margin="0,0,0,10">
+                <Border.Resources>
+                  <!-- the segments of the views control; the view shown is lit -->
+                  <Style x:Key="ModsSegment" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderBrush" Value="Transparent" />
+                    <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+                    <Setter Property="Padding" Value="10,4" />
+                  </Style>
+                  <Style x:Key="ModsSegmentCatalog" TargetType="Button" BasedOn="{StaticResource ModsSegment}">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding ShowCatalogView}" Value="True">
+                        <Setter Property="Background" Value="#33F01864" />
+                        <Setter Property="BorderBrush" Value="{StaticResource InfinityAccent}" />
+                        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+                        <Setter Property="FontWeight" Value="Bold" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                  <Style x:Key="ModsSegmentManual" TargetType="Button" BasedOn="{StaticResource ModsSegment}">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding ShowManualView}" Value="True">
+                        <Setter Property="Background" Value="#33F01864" />
+                        <Setter Property="BorderBrush" Value="{StaticResource InfinityAccent}" />
+                        <Setter Property="Foreground" Value="{StaticResource InfinityText}" />
+                        <Setter Property="FontWeight" Value="Bold" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Resources>
+                <Grid TextElement.FontSize="13">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" MinWidth="0" /></Grid.ColumnDefinitions>
                   <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding ModsHeading}" FontSize="18" FontWeight="Bold" VerticalAlignment="Center" Margin="2,0,14,0" />
+                    <!-- one game: the heading names it; two: the chips do -->
+                    <TextBlock Text="{Binding ModsTitle}" FontSize="18" FontWeight="Bold" VerticalAlignment="Center" Margin="4,0,14,0"
+                               Visibility="{Binding ShowModGameChips, Converter={StaticResource Hidden}}" />
                     <!-- Owner 2026-11-10: the game chips are PLAY's tiles (one selection with PLAY), here as a compact segmented control. -->
-                    <Border CornerRadius="9" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1" Padding="2" Margin="0,0,12,0"
+                    <Border CornerRadius="9" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1" Padding="2" Margin="0,0,8,0"
                             Background="{StaticResource InfinityBackground}" VerticalAlignment="Center"
                             Visibility="{Binding ShowModGameChips, Converter={StaticResource Visible}}">
                       <ItemsControl ItemsSource="{Binding GameCards}" AutomationProperties.Name="{Binding S[mods.games]}">
                         <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                           <DataTemplate>
-                            <Button Click="OnSelectModsGame" Padding="12,4" Margin="0" Cursor="Hand" AutomationProperties.Name="{Binding Title}">
+                            <Button Click="OnSelectModsGame" Padding="10,4" Margin="0" Cursor="Hand" AutomationProperties.Name="{Binding Title}">
                               <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                   <Setter Property="Background" Value="Transparent" />
@@ -2068,11 +2099,22 @@
                         </ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </Border>
+                    <!-- Alex 2026-11-12: the page's two views, the catalog and the mods installed by hand (with their count), for the chosen game. -->
+                    <Border CornerRadius="9" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1" Padding="2" Margin="0,0,8,0"
+                            Background="{StaticResource InfinityBackground}" VerticalAlignment="Center"
+                            Visibility="{Binding ShowModsViews, Converter={StaticResource Visible}}">
+                      <StackPanel Orientation="Horizontal" AutomationProperties.Name="{Binding S[mods.views]}">
+                        <Button Content="{Binding S[mods.view_catalog]}" Click="OnModsViewCatalog" Style="{StaticResource ModsSegmentCatalog}"
+                                AutomationProperties.Name="{Binding S[mods.view_catalog]}" />
+                        <Button Content="{Binding ManualViewLabel}" Click="OnModsViewManual" Style="{StaticResource ModsSegmentManual}"
+                                ToolTip="{Binding S[eomods.title]}" AutomationProperties.Name="{Binding ManualViewLabel}" />
+                      </StackPanel>
+                    </Border>
                     <!-- Alex 2026-11-10: every mod of the chosen game on or off (the # of each loadorder.txt line), after the small confirmation. -->
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Visibility="{Binding ShowToggleAllMods, Converter={StaticResource Visible}}">
-                      <Button Content="{Binding S[mods.enable_all]}" Click="OnEnableAllMods" IsEnabled="{Binding CanEnableAllMods}" Padding="12,5" Margin="0,0,6,0"
+                      <Button Content="{Binding S[mods.enable_all]}" Click="OnEnableAllMods" IsEnabled="{Binding CanEnableAllMods}" Padding="9,4" Margin="0,0,6,0"
                               AutomationProperties.Name="{Binding S[mods.enable_all]}" />
-                      <Button Content="{Binding S[mods.disable_all]}" Click="OnDisableAllMods" IsEnabled="{Binding CanDisableAllMods}" Padding="12,5" Margin="0,0,6,0"
+                      <Button Content="{Binding S[mods.disable_all]}" Click="OnDisableAllMods" IsEnabled="{Binding CanDisableAllMods}" Padding="9,4" Margin="0,0,6,0"
                               AutomationProperties.Name="{Binding S[mods.disable_all]}" />
                     </StackPanel>
                     <!-- Development tools only: the DEV catalog override and the native offline session. -->
@@ -2083,19 +2125,19 @@
                       <Button Click="OnInstallHook" IsEnabled="{Binding CanInstallHook}" Padding="10,5" Margin="0,0,6,0" AutomationProperties.Name="{Binding HookInstallLabel}"
                               Visibility="{Binding CanInstallHook, Converter={StaticResource Visible}}"><TextBlock Text="{Binding HookInstallLabel}" /></Button>
                     </StackPanel>
-                    <Button Click="OnLoadModCatalog" Padding="8,5" IsEnabled="{Binding ModsIdle}" Margin="0,0,6,0"
+                    <Button Click="OnLoadModCatalog" Padding="7,4" IsEnabled="{Binding ModsIdle}" Margin="0,0,6,0"
                             ToolTip="{Binding S[mods.refresh_catalog]}" AutomationProperties.Name="{Binding S[mods.refresh_catalog]}">
                       <Path Data="{StaticResource IconRefresh}" Style="{StaticResource InlineIcon}" Width="15" Height="15" StrokeThickness="2" />
                     </Button>
-                    <Button Content="{Binding S[mods.folder_short]}" Click="OnChooseAzimuth" Padding="12,5" IsEnabled="{Binding ModsIdle}"
+                    <Button Content="{Binding S[mods.folder_short]}" Click="OnChooseAzimuth" Padding="9,4" IsEnabled="{Binding ModsIdle}"
                             ToolTip="{Binding ModFolder}" AutomationProperties.Name="{Binding S[mods.choose_folder]}" />
                   </StackPanel>
-                  <TextBlock Grid.Column="1" Text="{Binding ModsToolbarInfo}" ToolTip="{Binding ModsToolbarTooltip}" FontSize="11.5" Margin="16,0,2,0"
+                  <TextBlock Grid.Column="1" Text="{Binding ModsToolbarInfo}" ToolTip="{Binding ModsToolbarTooltip}" FontSize="11.5" Margin="10,0,4,0"
                              HorizontalAlignment="Right" VerticalAlignment="Center" TextAlignment="Right" TextTrimming="CharacterEllipsis"
                              Foreground="{StaticResource InfinityMuted}" AutomationProperties.Name="{Binding ModsToolbarTooltip}" />
                 </Grid>
               </Border>
-              <Grid DockPanel.Dock="Top" Margin="0,0,0,12" Visibility="{Binding HasModCards, Converter={StaticResource Visible}}">
+              <Grid DockPanel.Dock="Top" Margin="0,0,0,12" Visibility="{Binding ShowModSearch, Converter={StaticResource Visible}}">
                 <TextBox Text="{Binding ModSearch, UpdateSourceTrigger=PropertyChanged}" Padding="14,9,38,9"
                          AutomationProperties.Name="{Binding S[mods.search]}" />
                 <TextBlock Text="{Binding S[mods.search]}" Margin="15,0,38,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
@@ -2115,24 +2157,27 @@
                                  IsIndeterminate="{Binding ModsReadingIndeterminate, Mode=OneWay}" />
                   </StackPanel>
                 </Border>
-                <!-- A catalog state the player must read (failed, not loaded, expired, offline copy) in full; T2b: a failed one offers a retry and
-                     the way to another catalog (the card is on Configure). -->
-                <StackPanel Margin="0,0,12,10" Visibility="{Binding HasModCatalogAlert, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding ModCatalogAlert}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" AutomationProperties.LiveSetting="Polite" />
-                  <WrapPanel Margin="0,8,0,0" Visibility="{Binding ModCatalogFailed, Converter={StaticResource Visible}}">
-                    <Button Content="{Binding S[mods.catalog_retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,6" Margin="0,0,8,0" />
-                    <Button Content="{Binding S[mods.catalog_other]}" Click="OnOpenCatalogSetting" Padding="10,6" />
-                  </WrapPanel>
-                </StackPanel>
-                <!-- OD-116: a player-chosen catalog is never shown without this warning. -->
-                <Border Style="{StaticResource Card}" Padding="12,10" Margin="0,0,12,10" BorderBrush="{StaticResource InfinityGold}"
-                        Visibility="{Binding UsingCustomCatalog, Converter={StaticResource Visible}}">
-                  <StackPanel>
-                    <TextBlock Text="{Binding CustomCatalogWarning}" TextWrapping="Wrap" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}" />
-                    <Button Content="{Binding S[catalog.use_official]}" Style="{StaticResource LinkButton}" Click="OnUseOfficialCatalog" HorizontalAlignment="Left"
-                            IsEnabled="{Binding CanUseOfficialCatalog}" Margin="-6,4,0,0" />
+                <!-- Alex 2026-11-12: the Catalog view (the catalog's state, its sets and cards). -->
+                <StackPanel Visibility="{Binding ShowCatalogView, Converter={StaticResource Visible}}">
+                  <!-- A catalog state the player must read (failed, not loaded, expired, offline copy) in full; T2b: a failed one offers a retry and
+                       the way to another catalog (the card is on Configure). -->
+                  <StackPanel Margin="0,0,12,10" Visibility="{Binding HasModCatalogAlert, Converter={StaticResource Visible}}">
+                    <TextBlock Text="{Binding ModCatalogAlert}" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" AutomationProperties.LiveSetting="Polite" />
+                    <WrapPanel Margin="0,8,0,0" Visibility="{Binding ModCatalogFailed, Converter={StaticResource Visible}}">
+                      <Button Content="{Binding S[mods.catalog_retry]}" Click="OnLoadModCatalog" IsEnabled="{Binding ModsIdle}" Padding="10,6" Margin="0,0,8,0" />
+                      <Button Content="{Binding S[mods.catalog_other]}" Click="OnOpenCatalogSetting" Padding="10,6" />
+                    </WrapPanel>
                   </StackPanel>
-                </Border>
+                  <!-- OD-116: a player-chosen catalog is never shown without this warning. -->
+                  <Border Style="{StaticResource Card}" Padding="12,10" Margin="0,0,12,10" BorderBrush="{StaticResource InfinityGold}"
+                          Visibility="{Binding UsingCustomCatalog, Converter={StaticResource Visible}}">
+                    <StackPanel>
+                      <TextBlock Text="{Binding CustomCatalogWarning}" TextWrapping="Wrap" FontWeight="SemiBold" Foreground="{StaticResource InfinityGold}" />
+                      <Button Content="{Binding S[catalog.use_official]}" Style="{StaticResource LinkButton}" Click="OnUseOfficialCatalog" HorizontalAlignment="Left"
+                              IsEnabled="{Binding CanUseOfficialCatalog}" Margin="-6,4,0,0" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
                 <!-- H4/§1.4: production recovery, always with a resolution. -->
                 <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,0,12,10" Visibility="{Binding ShowModRecovery, Converter={StaticResource Visible}}">
                   <StackPanel>
@@ -2168,31 +2213,55 @@
                     <Button Content="{Binding S[mods.layout_move]}" Click="OnMoveModsLayout" IsEnabled="{Binding ModsIdle}" Padding="10,6" HorizontalAlignment="Left" />
                   </StackPanel>
                 </Border>
-                <!-- OD-126: the mods of ExtraOptions' loader (<Azimuth>\mods) copied there by hand (owner 2026-10-28: the launcher's own
-                     catalog and custom mods have their cards above), each marked as such with a note on online play. -->
-                <StackPanel Margin="0,0,0,18" Visibility="{Binding HasExtraOptionsMods, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding S[eomods.title]}" FontSize="16" FontWeight="Bold" />
-                  <TextBlock Text="{Binding ExtraOptionsModsHint}" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource InfinityMuted}" />
-                  <TextBlock Text="{Binding ExtraOptionsModsFolder}" TextWrapping="Wrap" Margin="0,2,0,10" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
-                  <ItemsControl ItemsSource="{Binding ExtraOptionsModItems}">
+                <!-- Alex 2026-11-12: the Manual view, the mods copied into the chosen game's mods folder by hand (OD-126), as compact rows built
+                     for many; one short line explains them (all of it, the online note and the folder in its tooltip). -->
+                <StackPanel Margin="0,0,12,0" Visibility="{Binding ShowManualView, Converter={StaticResource Visible}}">
+                  <DockPanel Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Content="{Binding S[eomods.open_folder]}" Click="OnOpenManualModsFolder" Padding="10,4" FontSize="13"
+                            Margin="12,0,0,0" ToolTip="{Binding ExtraOptionsModsFolder}" AutomationProperties.Name="{Binding S[eomods.open_folder]}" />
+                    <TextBlock Text="{Binding ManualModsHintShort}" ToolTip="{Binding ManualModsHintTooltip}" FontSize="12" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" Foreground="{StaticResource InfinityMuted}" AutomationProperties.HelpText="{Binding ManualModsHintTooltip}" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding ManualModsEmpty}" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource InfinityMuted}"
+                             Visibility="{Binding ShowManualEmpty, Converter={StaticResource Visible}}" />
+                  <TextBlock Text="{Binding S[mods.search_none]}" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource InfinityMuted}"
+                             Visibility="{Binding NoMatchingManualMods, Converter={StaticResource Visible}}" />
+                  <ItemsControl ItemsSource="{Binding FilteredExtraOptionsModItems}" AutomationProperties.Name="{Binding S[eomods.title]}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate>
-                        <Border Style="{StaticResource Card}" Padding="14,10" Margin="0,0,12,8">
+                        <Border Style="{StaticResource Card}" Padding="12,6" Margin="0,0,0,6" CornerRadius="8">
                           <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel>
-                              <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Folder}" />
-                              <TextBlock Text="{Binding Details}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                              <TextBlock Text="{Binding Status}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" />
-                              <TextBlock Text="{Binding DataContext.S[eomods.manual_online], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                         FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource InfinityMuted}" Margin="0,4,0,0" />
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" MinWidth="120" />
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                              <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Folder}" />
+                              <TextBlock Text="{Binding Details}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,1,0,0" TextTrimming="CharacterEllipsis"
+                                         ToolTip="{Binding Details}" />
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Grid.Column="1" Text="{Binding Status}" ToolTip="{Binding Status}" FontSize="12" MaxWidth="230" Margin="12,0,0,0"
+                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                              <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                  <Setter Property="Foreground" Value="{StaticResource InfinityMuted}" />
+                                  <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Enabled}" Value="True"><Setter Property="Foreground" Value="{StaticResource InfinityText}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding Attention}" Value="True"><Setter Property="Foreground" Value="{StaticResource InfinityGold}" /></DataTrigger>
+                                  </Style.Triggers>
+                                </Style>
+                              </TextBlock.Style>
+                            </TextBlock>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" TextElement.FontSize="13">
+                              <Button Content="i" Click="OnManualModInformation" Width="24" Height="24" Padding="0" Margin="12,0,0,0" FontWeight="Bold" FontStyle="Italic"
+                                      ToolTip="{Binding Info}" AutomationProperties.Name="{Binding DataContext.S[eomods.info], RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                      AutomationProperties.HelpText="{Binding Info}" />
                               <Button Content="{Binding Toggle}" Click="OnToggleExtraOptionsMod" IsEnabled="{Binding CanToggle}"
-                                      Padding="12,7" Margin="12,0,0,0" AutomationProperties.Name="{Binding Toggle}" />
+                                      Padding="10,4" Margin="8,0,0,0" MinWidth="78" AutomationProperties.Name="{Binding Toggle}" />
                               <!-- Owner 2026-10-28: an off manual mod can be deleted from the mods folder (asked twice). -->
                               <Button Content="{Binding DeleteLabel}" Click="OnDeleteExtraOptionsMod" IsEnabled="{Binding CanDelete}"
-                                      Padding="12,7" Margin="8,0,0,0" AutomationProperties.Name="{Binding DeleteLabel}" />
+                                      Padding="10,4" Margin="6,0,0,0" AutomationProperties.Name="{Binding DeleteLabel}" />
                             </StackPanel>
                           </Grid>
                         </Border>
@@ -2200,95 +2269,97 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </StackPanel>
-                <TextBlock Text="{Binding S[mods.search_none]}" TextWrapping="Wrap" Margin="0,18,0,0" Foreground="{StaticResource InfinityMuted}"
-                           Visibility="{Binding NoMatchingMods, Converter={StaticResource Visible}}" />
-                <!-- Owner 2026-11-10: a game the catalog has nothing for yet says so (its ExtraOptions card stays). -->
-                <TextBlock Text="{Binding ModsEmptyForGame}" TextWrapping="Wrap" Margin="0,0,0,12" Foreground="{StaticResource InfinityMuted}"
-                           Visibility="{Binding ShowModsEmptyForGame, Converter={StaticResource Visible}}" />
-                <!-- OD-232: one card per set of packs sharing a hint (the ZS FM5 / FM6 Addon Packs): one folder pick installs them all,
-                     the packs are rows with their own actions. -->
-                <ItemsControl ItemsSource="{Binding FilteredModSetCards}" Visibility="{Binding HasModSetCards, Converter={StaticResource Visible}}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,0,12,12">
-                        <StackPanel>
+                <StackPanel Visibility="{Binding ShowCatalogView, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding S[mods.search_none]}" TextWrapping="Wrap" Margin="0,18,0,0" Foreground="{StaticResource InfinityMuted}"
+                             Visibility="{Binding NoMatchingMods, Converter={StaticResource Visible}}" />
+                  <!-- Owner 2026-11-10: a game the catalog has nothing for yet says so (its ExtraOptions card stays). -->
+                  <TextBlock Text="{Binding ModsEmptyForGame}" TextWrapping="Wrap" Margin="0,0,0,12" Foreground="{StaticResource InfinityMuted}"
+                             Visibility="{Binding ShowModsEmptyForGame, Converter={StaticResource Visible}}" />
+                  <!-- OD-232: one card per set of packs sharing a hint (the ZS FM5 / FM6 Addon Packs): one folder pick installs them all,
+                       the packs are rows with their own actions. -->
+                  <ItemsControl ItemsSource="{Binding FilteredModSetCards}" Visibility="{Binding HasModSetCards, Converter={StaticResource Visible}}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource Card}" Padding="14,12" Margin="0,0,12,12">
+                          <StackPanel>
+                            <Grid>
+                              <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                              <StackPanel>
+                                <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                                <TextBlock Text="{Binding Summary}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
+                              </StackPanel>
+                              <Button Grid.Column="1" Content="{Binding DataContext.S[modset.install_all], RelativeSource={RelativeSource AncestorType=Window}}"
+                                      Click="OnInstallModSet" IsEnabled="{Binding CanInstallAll}" Padding="12,7" Margin="12,0,0,0" VerticalAlignment="Center"
+                                      AutomationProperties.Name="{Binding DataContext.S[modset.install_all], RelativeSource={RelativeSource AncestorType=Window}}" />
+                            </Grid>
+                            <Expander Header="{Binding DataContext.S[modset.packs], RelativeSource={RelativeSource AncestorType=Window}}" IsExpanded="{Binding Expanded, Mode=TwoWay}" Margin="0,10,0,0">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0" />
+                                <TextBlock Text="{Binding Report}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}" Margin="0,8,0,0"
+                                           AutomationProperties.LiveSetting="Polite" Visibility="{Binding HasReport, Converter={StaticResource Visible}}" />
+                                <ItemsControl ItemsSource="{Binding Packs}" Margin="0,8,0,0">
+                                  <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                      <Border Style="{StaticResource Card}" Padding="14,10" Margin="0,0,0,8">
+                                        <Grid>
+                                          <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                          <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
+                                            <TextBlock Text="{Binding VersionText}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" />
+                                            <TextBlock Text="{Binding Badge}" FontSize="12" Margin="0,5,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}"
+                                                       Foreground="{StaticResource InfinityGold}" />
+                                          </StackPanel>
+                                          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button Content="i" Click="OnModInformation" Width="24" Height="24" Padding="0" Margin="12,0,0,0" FontWeight="Bold" FontStyle="Italic"
+                                                    ToolTip="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    AutomationProperties.Name="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}" />
+                                            <Button Content="{Binding Action}" Click="OnActOnMod" IsEnabled="{Binding CanAct}" Padding="12,7" Margin="8,0,0,0"
+                                                    AutomationProperties.Name="{Binding Action}" />
+                                            <Button Content="{Binding DataContext.S[mods.uninstall], RelativeSource={RelativeSource AncestorType=Window}}" Click="OnUninstallModCard"
+                                                    IsEnabled="{Binding CanUninstall}" Visibility="{Binding Installed, Converter={StaticResource Visible}}" Padding="12,7" Margin="8,0,0,0"
+                                                    AutomationProperties.Name="{Binding DataContext.S[mods.uninstall], RelativeSource={RelativeSource AncestorType=Window}}" />
+                                          </StackPanel>
+                                        </Grid>
+                                      </Border>
+                                    </DataTemplate>
+                                  </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                              </StackPanel>
+                            </Expander>
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <ItemsControl ItemsSource="{Binding FilteredModCards}" Visibility="{Binding HasModCards, Converter={StaticResource Visible}}">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Style="{StaticResource Card}" Width="230" Height="144" Padding="0" Margin="0,0,12,12">
                           <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel>
-                              <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
-                              <TextBlock Text="{Binding Summary}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
-                            </StackPanel>
-                            <Button Grid.Column="1" Content="{Binding DataContext.S[modset.install_all], RelativeSource={RelativeSource AncestorType=Window}}"
-                                    Click="OnInstallModSet" IsEnabled="{Binding CanInstallAll}" Padding="12,7" Margin="12,0,0,0" VerticalAlignment="Center"
-                                    AutomationProperties.Name="{Binding DataContext.S[modset.install_all], RelativeSource={RelativeSource AncestorType=Window}}" />
+                            <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Button Click="OnSelectMod" Style="{StaticResource ModCardButton}" AutomationProperties.Name="{Binding Name}">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,24,0" ToolTip="{Binding Name}" />
+                                <TextBlock Text="{Binding VersionText}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
+                                <TextBlock Text="{Binding SourceBadge}" Foreground="{StaticResource InfinityPink}" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"
+                                           Visibility="{Binding ShowSourceBadge, Converter={StaticResource Visible}}" />
+                                <TextBlock Text="{Binding Badge}" Foreground="{StaticResource InfinityGold}" FontSize="12" Margin="0,12,0,0"
+                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}" />
+                              </StackPanel>
+                            </Button>
+                            <Button Content="i" Click="OnModInformation" Width="24" Height="24" Padding="0" Margin="0,9,9,0"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top" FontWeight="Bold" FontStyle="Italic"
+                                    ToolTip="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}"
+                                    AutomationProperties.Name="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}" />
+                            <Button Grid.Row="1" Content="{Binding Action}" Click="OnActOnMod" IsEnabled="{Binding CanAct}"
+                                    Visibility="{Binding ShowAction, Converter={StaticResource Visible}}" Padding="10,7" Margin="14,0,14,14" />
                           </Grid>
-                          <Expander Header="{Binding DataContext.S[modset.packs], RelativeSource={RelativeSource AncestorType=Window}}" IsExpanded="{Binding Expanded, Mode=TwoWay}" Margin="0,10,0,0">
-                            <StackPanel>
-                              <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,6,0,0" />
-                              <TextBlock Text="{Binding Report}" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}" Margin="0,8,0,0"
-                                         AutomationProperties.LiveSetting="Polite" Visibility="{Binding HasReport, Converter={StaticResource Visible}}" />
-                              <ItemsControl ItemsSource="{Binding Packs}" Margin="0,8,0,0">
-                                <ItemsControl.ItemTemplate>
-                                  <DataTemplate>
-                                    <Border Style="{StaticResource Card}" Padding="14,10" Margin="0,0,0,8">
-                                      <Grid>
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                          <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
-                                          <TextBlock Text="{Binding VersionText}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,3,0,0" />
-                                          <TextBlock Text="{Binding Badge}" FontSize="12" Margin="0,5,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}"
-                                                     Foreground="{StaticResource InfinityGold}" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                          <Button Content="i" Click="OnModInformation" Width="24" Height="24" Padding="0" Margin="12,0,0,0" FontWeight="Bold" FontStyle="Italic"
-                                                  ToolTip="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}"
-                                                  AutomationProperties.Name="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}" />
-                                          <Button Content="{Binding Action}" Click="OnActOnMod" IsEnabled="{Binding CanAct}" Padding="12,7" Margin="8,0,0,0"
-                                                  AutomationProperties.Name="{Binding Action}" />
-                                          <Button Content="{Binding DataContext.S[mods.uninstall], RelativeSource={RelativeSource AncestorType=Window}}" Click="OnUninstallModCard"
-                                                  IsEnabled="{Binding CanUninstall}" Visibility="{Binding Installed, Converter={StaticResource Visible}}" Padding="12,7" Margin="8,0,0,0"
-                                                  AutomationProperties.Name="{Binding DataContext.S[mods.uninstall], RelativeSource={RelativeSource AncestorType=Window}}" />
-                                        </StackPanel>
-                                      </Grid>
-                                    </Border>
-                                  </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                              </ItemsControl>
-                            </StackPanel>
-                          </Expander>
-                        </StackPanel>
-                      </Border>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <ItemsControl ItemsSource="{Binding FilteredModCards}" Visibility="{Binding HasModCards, Converter={StaticResource Visible}}">
-                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Border Style="{StaticResource Card}" Width="230" Height="144" Padding="0" Margin="0,0,12,12">
-                        <Grid>
-                          <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                          <Button Click="OnSelectMod" Style="{StaticResource ModCardButton}" AutomationProperties.Name="{Binding Name}">
-                            <StackPanel>
-                              <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,24,0" ToolTip="{Binding Name}" />
-                              <TextBlock Text="{Binding VersionText}" FontSize="11" Foreground="{StaticResource InfinityMuted}" Margin="0,5,0,0" />
-                              <TextBlock Text="{Binding SourceBadge}" Foreground="{StaticResource InfinityPink}" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"
-                                         Visibility="{Binding ShowSourceBadge, Converter={StaticResource Visible}}" />
-                              <TextBlock Text="{Binding Badge}" Foreground="{StaticResource InfinityGold}" FontSize="12" Margin="0,12,0,0"
-                                         TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}" />
-                            </StackPanel>
-                          </Button>
-                          <Button Content="i" Click="OnModInformation" Width="24" Height="24" Padding="0" Margin="0,9,9,0"
-                                  HorizontalAlignment="Right" VerticalAlignment="Top" FontWeight="Bold" FontStyle="Italic"
-                                  ToolTip="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}"
-                                  AutomationProperties.Name="{Binding DataContext.S[mods.information], RelativeSource={RelativeSource AncestorType=Window}}" />
-                          <Button Grid.Row="1" Content="{Binding Action}" Click="OnActOnMod" IsEnabled="{Binding CanAct}"
-                                  Visibility="{Binding ShowAction, Converter={StaticResource Visible}}" Padding="10,7" Margin="14,0,14,14" />
-                        </Grid>
-                      </Border>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
               </StackPanel>
               </ScrollViewer>
             </DockPanel>
