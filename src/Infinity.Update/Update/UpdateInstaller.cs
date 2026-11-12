@@ -21,7 +21,8 @@ public sealed class UpdateInstaller(IUpdatePlanVerifier verifier, Func<bool> sup
         "i18n/en.json", "i18n/pt-BR.json", "i18n-win/en.json", "i18n-win/pt-BR.json",
         "licenses/BouncyCastle-LICENSE.md", "licenses/fh2-mods-LICENSE.txt", "licenses/FluentSystemIcons-LICENSE.txt",
         "licenses/Hook-NOTICE.md", "licenses/ImGui-LICENSE.txt", "licenses/MinHook-LICENSE.txt", "licenses/Selawik-LICENSE.txt",
-        // the native mod runtime (OD-112) and its notices
+        // OD-246: the retired native mod runtime and its notices. No release ships them any more; earlier releases installed
+        // them, so their names stay valid for the installed inventory, the release history and the update that retires them.
         "mod/infinity_mod.dll", "mod/infinity_mod.dll.sig", "mod/infinity-mod-prepare.exe", "mod/infinity-mod-prepare.exe.sig",
         "licenses/SQLite-VERSION.txt", "licenses/Mod-NOTICE.md", "licenses/Mod-SDK-LICENSE.txt", "licenses/FH2-hooks-MIT.txt",
         "licenses/Mod-MinHook-LICENSE.txt",

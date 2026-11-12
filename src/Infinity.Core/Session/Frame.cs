@@ -113,32 +113,6 @@ public static class FollowHostLobby
     public const byte FreeRoam = 2;
 }
 
-/// <summary><c>ModsReport.phase</c>.</summary>
-public static class ModsReportPhase
-{
-    public const byte Loading = 0;
-    public const byte Ready = 1;
-    public const byte Failed = 2;
-}
-
-/// <summary><c>ModsReportEntry.state</c>.</summary>
-public static class ModsReportState
-{
-    public const byte Pending = 0;
-    public const byte Initialized = 1;
-    public const byte Failed = 2;
-}
-
-/// <summary>One mod of a <see cref="Frame.ModsReport"/>: the plan's id and version, the hashes the runtime verified, the echoed compatibility fingerprint.</summary>
-public sealed record ModsReportEntry(string Id, string Version, byte[] BinarySha256, byte[] SettingsSha256, byte[] CompatibilitySha256, byte State)
-{
-    public bool Equals(ModsReportEntry? other) => other is not null && Id == other.Id && Version == other.Version && State == other.State
-        && BinarySha256.AsSpan().SequenceEqual(other.BinarySha256) && SettingsSha256.AsSpan().SequenceEqual(other.SettingsSha256)
-        && CompatibilitySha256.AsSpan().SequenceEqual(other.CompatibilitySha256);
-
-    public override int GetHashCode() => HashCode.Combine(Id, State);
-}
-
 /// <summary>Bounded terminal control reasons; never player text or an authorization token.</summary>
 public enum OnlineSuspendReason : byte { Policy, UpdateRequired, Integrity, SessionEnded, ControlLost }
 
@@ -154,42 +128,6 @@ public abstract record Frame
     }
 
     public abstract byte Type { get; }
-
-    /// <summary>
-    /// hook → launcher (0x1b, N-H2, OD-112): what the native mod runtime actually initialized, bound to
-    /// this launch by the plan's <paramref name="Nonce"/> and <paramref name="PlanSha256"/>
-    /// (<see cref="ModsReportPhase"/>). The hashes are the files the runtime verified before loading them;
-    /// the compatibility hash is the launcher's own <c>infinity-mod-compatibility-v1</c> fingerprint, echoed.
-    /// Compatibility evidence, not anti-cheat: accept it only when the nonce and plan digest are this
-    /// launch's and every binary and settings hash equals what the launcher prepared.
-    /// </summary>
-    public sealed record ModsReport(byte[] Nonce, byte[] PlanSha256, byte Phase, IReadOnlyList<ModsReportEntry> Mods) : Frame
-    {
-        public const byte Version = 1;
-        public const int MaxMods = 32;
-
-        public override byte Type => 0x1b;
-
-        public bool Equals(ModsReport? other) => other is not null && Nonce.AsSpan().SequenceEqual(other.Nonce)
-            && PlanSha256.AsSpan().SequenceEqual(other.PlanSha256) && Phase == other.Phase && Mods.SequenceEqual(other.Mods);
-
-        public override int GetHashCode() => HashCode.Combine(Phase, Mods.Count);
-
-        internal void Validate()
-        {
-            if (Nonce.Length != 16 || Nonce.All(b => b == 0) || PlanSha256.Length != 32 || Phase > ModsReportPhase.Failed || Mods.Count > MaxMods)
-                throw new ProtocolException("Invalid mods report");
-            foreach (var mod in Mods)
-            {
-                if (mod.Id.Length is 0 or > 64 || mod.Version.Length > 64 || !mod.Id.All(c => c is > ' ' and < (char)0x7f) || !mod.Version.All(c => c is >= ' ' and < (char)0x7f)
-                    || mod.BinarySha256.Length != 32 || mod.SettingsSha256.Length != 32 || mod.CompatibilitySha256.Length != 32 || mod.State > ModsReportState.Failed)
-                    throw new ProtocolException("Invalid mods report entry");
-            }
-            if (Mods.Select(m => m.Id).Distinct(StringComparer.Ordinal).Count() != Mods.Count) throw new ProtocolException("Duplicate mods report entry");
-            if (Phase == ModsReportPhase.Ready && Mods.Any(m => m.State != ModsReportState.Initialized))
-                throw new ProtocolException("A ready mods report lists a mod that is not initialized");
-        }
-    }
 
     /// <summary>
     /// launcher → hook (0x1c, CR-L39), right before <see cref="Ticket"/> and only for a custom server: the launch-ticket keys its
@@ -638,23 +576,6 @@ public abstract record Frame
         var w = new WireWriter(Type);
         switch (this)
         {
-            case ModsReport report:
-                report.Validate();
-                w.U8(ModsReport.Version);
-                w.Fixed(report.Nonce, 16, "mods nonce");
-                w.Fixed(report.PlanSha256, 32, "mods plan");
-                w.U8(report.Phase);
-                w.U8((byte)report.Mods.Count);
-                foreach (var mod in report.Mods)
-                {
-                    w.Str(mod.Id);
-                    w.Str(mod.Version);
-                    w.Fixed(mod.BinarySha256, 32, "mod binary");
-                    w.Fixed(mod.SettingsSha256, 32, "mod settings");
-                    w.Fixed(mod.CompatibilitySha256, 32, "mod compatibility");
-                    w.U8(mod.State);
-                }
-                break;
             case CustomTrust trust:
                 trust.Validate();
                 w.U8(CustomTrust.Version);
@@ -814,7 +735,6 @@ public abstract record Frame
             0x18 => new RelayCandidates(r.Take(length.Value-1).ToArray()),
             0x19 => new RelayClock(BinaryPrimitives.ReadUInt64BigEndian(r.Take(8))),
             0x1a => new UdpDiagnostic(r.Take(length.Value-1).ToArray()),
-            0x1b => DecodeModsReport(ref r),
             0x1c => DecodeCustomTrust(ref r),
             0x1f => length.Value - 1 == 4 ? new FreeRoamNeed(r.U32()) : new FreeRoamNeed(r.U32(), r.U8()),
             0x20 => new FreeRoamReady(r.U32(), r.U8()),
@@ -837,7 +757,6 @@ public abstract record Frame
         if (frame is Watch watch) watch.Validate();
         if (frame is Observed observed) observed.Validate();
         if (frame is PlayerParts playerParts) playerParts.Validate();
-        if (frame is ModsReport mods) mods.Validate();
         if (frame is CustomTrust trust) trust.Validate();
         if(frame is RelayContext context)RelayContext.Validate(context.Payload);
         if (frame is FreeRoamReady ready) FreeRoamReady.Validate(ready.Result);
@@ -886,19 +805,5 @@ public abstract record Frame
         var parts = new uint[PlayerParts.Slots];
         for (var i = 0; i < parts.Length; i++) parts[i] = r.U32();
         return new(xuid, index, flags, model, parts);
-    }
-
-    private static ModsReport DecodeModsReport(ref WireReader r)
-    {
-        if (r.U8() != ModsReport.Version) throw new ProtocolException("Unknown mods report version");
-        var nonce = r.Take(16).ToArray();
-        var plan = r.Take(32).ToArray();
-        var phase = r.U8();
-        var count = r.U8();
-        if (count > ModsReport.MaxMods) throw new ProtocolException("Too many mods in a report");
-        var mods = new List<ModsReportEntry>(count);
-        for (var i = 0; i < count; ++i)
-            mods.Add(new ModsReportEntry(r.Str(), r.Str(), r.Take(32).ToArray(), r.Take(32).ToArray(), r.Take(32).ToArray(), r.U8()));
-        return new ModsReport(nonce, plan, phase, mods);
     }
 }

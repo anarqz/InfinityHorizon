@@ -722,8 +722,6 @@ public sealed class PlaySupervisor
                             await SuspendAsync(OnlineSuspendReason.Policy, PauseText(pause), pause).ConfigureAwait(false);
                         }
                         var frame = received.Frame;
-                        // the retired native mod runtime's report (OD-113; OD-232): no launch plans one, so nothing reads it
-                        if (frame is Frame.ModsReport) continue;
                         if(frame is Frame.UdpDiagnostic diagnostic)
                         {
                             if(endpoint.Greeted && !suspended && tokensOpen)worlds?.RecordUdpDiagnostic(diagnostic);

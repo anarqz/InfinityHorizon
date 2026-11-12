@@ -21,11 +21,8 @@ switch (args)
         return 0;
     case ["sign", var file]:
         return Sign(file, "fh2online-update-v1 ");
-    case ["sign-mod", var file]:
-        // the native mod runtime and helper: their own domain (the hook's mod_host.c verifies it)
-        return Sign(file, "fi-mod-runtime-v1 ");
     default:
-        Console.Error.WriteLine("usage: devsign key | sign <file> | sign-mod <file>");
+        Console.Error.WriteLine("usage: devsign key | sign <file>");
         return 2;
 }
 

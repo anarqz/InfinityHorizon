@@ -34,7 +34,6 @@ SOURCES = [
     "src/core/azimuth_host.c",
     # src/infinity: ForzaInfinity's own modules
     "src/infinity/runtime.c",
-    "src/infinity/mod_host.c",
     "src/infinity/gamer_card.c",
     "src/infinity/voice_ui.c",
     "src/infinity/player_actions.c",

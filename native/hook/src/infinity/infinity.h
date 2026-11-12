@@ -27,9 +27,6 @@ void fi_unlock_shared(SRWLOCK *lock);
 #define ReleaseSRWLockShared(lock) fi_unlock_shared(lock)
 #endif
 
-void fi_mod_host_start(void *image);
-void fi_mod_host_wait(unsigned ms);
-
 int fi_launch_relay_network_hint(const unsigned char *payload,size_t size);
 int fi_launch_udp_diagnostic(const unsigned char *payload,size_t size);
 int azimuth_proxy_relay_candidates(const unsigned char *payload,size_t size);
@@ -271,12 +268,6 @@ size_t fi_ticket_rewrite(const unsigned char *body, size_t size, size_t value_at
                          size_t capacity);
 void fi_ticket_guard_request(const wchar_t *method, const wchar_t *url, const unsigned char *body, size_t size);
 void fi_ticket_guard_associated(void);
-/* N-H2: the native mod runtime's snapshot as a ModsReport (0x1b) for the launcher; the session
-   writer sends it once it changed. 0 outside a launcher session. */
-struct InfinityModsSnapshotV2;
-int fi_launch_mods_report(const struct InfinityModsSnapshotV2 *snapshot);
-size_t fi_launch_mods_encode(unsigned char *out, size_t cap, const struct InfinityModsSnapshotV2 *snapshot);
-void fi_launch_mods_flush(unsigned ms);
 /* An optional export of the overlay the launcher had loaded (0 without one). */
 void *fi_launch_overlay_export(const char *name);
 /* OD-112: the game's PLAYER DETAILS opens the overlay's player pane instead of the system
