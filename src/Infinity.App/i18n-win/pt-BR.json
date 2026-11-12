@@ -1273,7 +1273,6 @@
   "sm.crumb.home": "Saves",
   "sm.crumb.create": "Criar perfil",
   "sm.crumb.start": "Começar carreira",
-  "sm.crumb.resolve": "Resolver",
   "sm.crumb.history": "Histórico",
   "sm.crumb.delete": "Excluir",
   "sm.crumb.help": "Help Sensei",
@@ -1650,5 +1649,10 @@
   "play.notice_more": "+{count} outros avisos",
   "play.crash_waiting": "O jogo travou ({code}). O relatório está esperando: pegue os logs ou ignore.",
   "copyask.backup_first": "Antes, é feito um backup verificado do seu save atual do Azimuth; o caminho exato do backup aparece quando a cópia termina. O save de origem só é lido.",
-  "export.copy_from_cloud": "save Noob antigo de {name} na nuvem"
+  "export.copy_from_cloud": "save Noob antigo de {name} na nuvem",
+  "play.stats_azimuth_none": "Sem save deste jogo ainda",
+  "play.stats_azimuth_unreadable": "Save ilegível",
+  "play.stats_azimuth_no_folder": "Escolha a pasta do Azimuth",
+  "sm.resolve.cloud_replaces": "Substitui o save deste PC. Antes, o save deste PC é copiado para o Histórico.",
+  "sm.resolve.pc_replaces": "Nada é gravado agora. O save deste PC vai para a nuvem no seu próximo Jogar; o save atual da nuvem fica no histórico dela."
 }

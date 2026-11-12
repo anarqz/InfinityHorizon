@@ -269,6 +269,19 @@ public partial class MainWindow : Window
 
     private void OnCancelCopy(object sender, RoutedEventArgs e) => _vm.CancelCopy();
 
+    // owner 2026-11-12: Resolve (cloud vs this PC) is a centred popup; the keyboard lands on Not now, Escape is Not now
+    private void OnCloseResolve(object sender, RoutedEventArgs e) => _vm.CloseResolve();
+
+    private void OnResolveKey(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape || !_vm.Idle) return;
+        e.Handled = true; _vm.CloseResolve();
+    }
+
+    private void OnResolveVisible(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true) _ = Dispatcher.InvokeAsync(() => ResolveNotNow.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
     private void OnCopyConfirmKey(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Escape || !_vm.Idle) return;

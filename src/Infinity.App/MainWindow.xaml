@@ -1334,73 +1334,6 @@
 
                 <!-- owner 2026-11-08: a career starts on PLAY (its inline choice), never on the Profiles page -->
 
-                <!-- ============ RESOLVE: cloud vs this PC, the newer one recommended ============ -->
-                <StackPanel MaxWidth="860" Visibility="{Binding ShowSavesResolve, Converter={StaticResource Visible}}">
-                  <TextBlock Text="{Binding ResolveTitle}" Style="{StaticResource SmH1}" />
-                  <TextBlock Text="{Binding S[sm.resolve_sub]}" Style="{StaticResource SmSub}" />
-                  <UniformGrid Columns="2">
-                    <Border Style="{StaticResource SmCard}" Margin="0,0,9,0" DataContext="{Binding ResolveCloud}">
-                      <StackPanel>
-                        <Grid HorizontalAlignment="Left">
-                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.GoodSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
-                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Good}" />
-                          </Border>
-                          <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
-                            <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
-                          </Border>
-                        </Grid>
-                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
-                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
-                        <Button Content="{Binding ActionLabel}" Margin="0,16,0,0" HorizontalAlignment="Left" Click="OnResolveKeepCloud"
-                                IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
-                          <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SmButton}">
-                              <Style.Triggers>
-                                <DataTrigger Binding="{Binding Recommended}" Value="True">
-                                  <Setter Property="Background" Value="{x:Static local:SlotBrushes.Azimuth}" />
-                                  <Setter Property="Foreground" Value="#FF071018" />
-                                  <Setter Property="FontWeight" Value="Bold" />
-                                </DataTrigger>
-                              </Style.Triggers>
-                            </Style>
-                          </Button.Style>
-                        </Button>
-                      </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource SmCard}" Margin="9,0,0,0" DataContext="{Binding ResolvePc}">
-                      <StackPanel>
-                        <Grid HorizontalAlignment="Left">
-                          <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.GoodSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
-                            <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Good}" />
-                          </Border>
-                          <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
-                            <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
-                          </Border>
-                        </Grid>
-                        <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
-                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
-                        <Button Content="{Binding ActionLabel}" Margin="0,16,0,0" HorizontalAlignment="Left" Click="OnResolveKeepPc"
-                                IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
-                          <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource SmButton}">
-                              <Style.Triggers>
-                                <DataTrigger Binding="{Binding Recommended}" Value="True">
-                                  <Setter Property="Background" Value="{x:Static local:SlotBrushes.Azimuth}" />
-                                  <Setter Property="Foreground" Value="#FF071018" />
-                                  <Setter Property="FontWeight" Value="Bold" />
-                                </DataTrigger>
-                              </Style.Triggers>
-                            </Style>
-                          </Button.Style>
-                        </Button>
-                      </StackPanel>
-                    </Border>
-                  </UniformGrid>
-                  <Border Style="{StaticResource SmNote}" Visibility="{Binding ResolveHardcore, Converter={StaticResource Visible}}">
-                    <TextBlock Text="{Binding S[sm.resolve_hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
-                  </Border>
-                </StackPanel>
-
                 <!-- ============ PICK: "Use another save on this PC…" (owner 2026-11-11), every save of the game here, the pick becomes the Azimuth save ============ -->
                 <StackPanel x:Name="OtherSavePicker" MaxWidth="860" Visibility="{Binding ShowSavesPick, Converter={StaticResource Visible}}">
                   <TextBlock Text="{Binding PickTitle}" Style="{StaticResource SmH1}" />
@@ -1720,28 +1653,30 @@
           <!-- PLAY: admission happens here; the game starts only with a verified active ticket. -->
           <!-- Owner 2026-11-08: no news on PLAY; news lives only on the NEWS page (sidebar). -->
           <Grid x:Name="HomeArea" Visibility="{Binding ShowHome, Converter={StaticResource Visible}}">
-          <ScrollViewer x:Name="HomeScroll" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+          <!-- owner 2026-11-12 (PLAY must fit): the column is laid out at its design width and scaled down as a whole when the window is smaller
+               (never up, never a scrollbar), so both profile cards and their PLAY buttons stay in view at the minimum window size. -->
+          <Viewbox x:Name="HomeFit" Stretch="Uniform" StretchDirection="DownOnly" VerticalAlignment="Top" HorizontalAlignment="Center">
             <Grid>
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-            <StackPanel x:Name="PlayColumn" MaxWidth="760" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8,0,8">
+            <StackPanel x:Name="PlayColumn" Width="680" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,4,0,4">
               <!-- Owner 2026-11-08 (the PLAY revamp; games-5 after the wireframe): one centered column: our logo, the game tiles, one button per
                    profile, "manage profiles". -->
-              <Image x:Name="PlayLogo" Source="{StaticResource BrandLogo}" Width="380" HorizontalAlignment="Center" Margin="0,0,0,8"
+              <Image x:Name="PlayLogo" Source="{StaticResource BrandLogo}" Width="300" HorizontalAlignment="Center" Margin="0,0,0,4"
                      RenderOptions.BitmapScalingMode="HighQuality" AutomationProperties.Name="{Binding PlayTitle}" />
               <!-- every catalog game (PlayTiles): its cover (OD-217, shipped in the package) or the styled tile, the name small under it; a game
                    this Azimuth install lacks is dimmed with the reason. A horizontal scrollbar when they overflow. -->
-              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,16,0,6" PanningMode="HorizontalOnly"
+              <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,10,0,4" PanningMode="HorizontalOnly"
                             HorizontalAlignment="Center" Focusable="False" IsEnabled="{Binding Idle}">
                 <ItemsControl ItemsSource="{Binding GameCards}" Focusable="False">
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Button Click="OnSelectGameTile" IsEnabled="{Binding Enabled}" Width="168" Margin="8,0,8,12" Cursor="Hand" VerticalAlignment="Top"
+                      <Button Click="OnSelectGameTile" IsEnabled="{Binding Enabled}" Width="140" Margin="8,0,8,10" Cursor="Hand" VerticalAlignment="Top"
                               FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" ToolTip="{Binding Title}" ToolTipService.ShowOnDisabled="True">
                         <Button.Template>
                           <ControlTemplate TargetType="Button">
                             <StackPanel Background="Transparent">
-                              <Grid Width="168" Height="168">
+                              <Grid Width="140" Height="140">
                                 <Grid x:Name="Art">
                                   <Border CornerRadius="14" Background="{StaticResource SmCardSurface}" />
                                   <!-- the styled tile: no cover file, or one that did not decode -->
@@ -1806,11 +1741,11 @@
                   <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                      <Button Click="OnPlayButton" IsEnabled="{Binding Enabled}" Margin="7,0" MinHeight="168" Cursor="Hand"
+                      <Button Click="OnPlayButton" IsEnabled="{Binding Enabled}" Margin="7,0" MinHeight="150" Cursor="Hand"
                               FocusVisualStyle="{x:Null}" AutomationProperties.Name="{Binding Title}" HorizontalContentAlignment="Stretch">
                         <Button.Template>
                           <ControlTemplate TargetType="Button">
-                            <Border x:Name="Box" CornerRadius="16" Background="{StaticResource SmCardSurface}" BorderBrush="{Binding Accent}" BorderThickness="1.5" Padding="20,18">
+                            <Border x:Name="Box" CornerRadius="16" Background="{StaticResource SmCardSurface}" BorderBrush="{Binding Accent}" BorderThickness="1.5" Padding="20,16">
                               <DockPanel LastChildFill="False">
                                 <DockPanel DockPanel.Dock="Top">
                                   <Grid DockPanel.Dock="Left" Width="40" Height="40" VerticalAlignment="Center">
@@ -1823,11 +1758,11 @@
                                                Visibility="{Binding HasGamertag, Converter={StaticResource Visible}}" />
                                   </StackPanel>
                                 </DockPanel>
-                                <TextBlock DockPanel.Dock="Top" Text="{Binding Stats}" ToolTip="{Binding StatsTip}" Margin="0,14,0,0" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource InfinityText}"
-                                           TextWrapping="Wrap" Visibility="{Binding HasStats, Converter={StaticResource Visible}}" />
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding Stats}" ToolTip="{Binding StatsHover}" Margin="0,12,0,0" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource InfinityText}"
+                                           TextTrimming="CharacterEllipsis" Visibility="{Binding HasStats, Converter={StaticResource Visible}}" />
                                 <TextBlock DockPanel.Dock="Top" Text="{Binding Note}" Margin="0,10,0,0" Style="{StaticResource SmHint}"
                                            Visibility="{Binding HasNote, Converter={StaticResource Visible}}" />
-                                <Border x:Name="Action" DockPanel.Dock="Bottom" Margin="0,16,0,0" CornerRadius="10" Background="{Binding Accent}" Padding="14,11">
+                                <Border x:Name="Action" DockPanel.Dock="Bottom" Margin="0,12,0,0" CornerRadius="10" Background="{Binding Accent}" Padding="14,11">
                                   <TextBlock x:Name="ActionText" Text="{Binding Title}" Foreground="#FF071018" FontWeight="Black" FontSize="17" HorizontalAlignment="Center" TextWrapping="Wrap"
                                              TextAlignment="Center" />
                                 </Border>
@@ -1859,7 +1794,7 @@
               <!-- owner 2026-11-10 (3.1.1): the queue is a modal over the whole window (QueueOverlay, below), no longer a card here -->
             </StackPanel>
             </Grid>
-          </ScrollViewer>
+          </Viewbox>
           </Grid>
 
           <!-- OD-119: News, the same feed (offline too); an item opens here with Back. T3b (Alex): read on black, with an almost
@@ -2746,6 +2681,92 @@
               <Button x:Name="CopyConfirmButton" Content="{Binding CopyConfirmLabel}" Background="{x:Static local:SlotBrushes.Azimuth}" Style="{StaticResource SmPrimary}"
                       Click="OnConfirmCopy" IsEnabled="{Binding CanConfirmCopy}" />
               <Button Content="{Binding S[sm.cancel]}" Style="{StaticResource SmButton}" Margin="10,0,0,0" x:Name="CopyCancelButton" Click="OnCancelCopy" />
+            </WrapPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Border>
+    <!-- (owner 2026-11-12: "The resolve page, let's move to a popup instead of a full page") cloud vs this PC, the newer one recommended: each
+         side says what its choice replaces and the backup; Keep cloud backs this PC's save up first and is refused while the game runs; a
+         refusal or failure stays here with its reason; Not now writes nothing. In the queue of the other save confirmations. -->
+    <Border x:Name="ResolveOverlay" Panel.ZIndex="94" Background="#B3080410" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
+            KeyboardNavigation.ControlTabNavigation="Cycle" Visibility="{Binding ShowResolveConfirm, Converter={StaticResource Visible}}"
+            IsVisibleChanged="OnResolveVisible" KeyDown="OnResolveKey" AutomationProperties.Name="{Binding ResolveTitle}">
+      <Border Background="{StaticResource InfinitySurface}" BorderBrush="{StaticResource InfinityBorder}" BorderThickness="1"
+              CornerRadius="18" Padding="32,26" MaxWidth="860" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+          <StackPanel>
+            <TextBlock Text="{Binding ResolveTitle}" Style="{StaticResource SmH1}" />
+            <TextBlock Text="{Binding S[sm.resolve_sub]}" Style="{StaticResource SmSub}" />
+            <UniformGrid Columns="2">
+              <Border Style="{StaticResource SmCard}" Margin="0,0,9,0" DataContext="{Binding ResolveCloud}">
+                <StackPanel>
+                  <Grid HorizontalAlignment="Left">
+                    <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.GoodSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Good}" />
+                    </Border>
+                    <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
+                      <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                    </Border>
+                  </Grid>
+                  <TextBlock Text="{Binding Title}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
+                  <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                  <TextBlock Text="{Binding DataContext.S[sm.resolve.cloud_replaces], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmHint}" FontSize="12"
+                             Margin="0,10,0,0" TextWrapping="Wrap" />
+                  <Button Content="{Binding ActionLabel}" Margin="0,12,0,0" HorizontalAlignment="Left" Click="OnResolveKeepCloud"
+                          IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
+                    <Button.Style>
+                      <Style TargetType="Button" BasedOn="{StaticResource SmButton}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Recommended}" Value="True">
+                            <Setter Property="Background" Value="{x:Static local:SlotBrushes.Azimuth}" />
+                            <Setter Property="Foreground" Value="#FF071018" />
+                            <Setter Property="FontWeight" Value="Bold" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
+                </StackPanel>
+              </Border>              <Border Style="{StaticResource SmCard}" Margin="9,0,0,0" DataContext="{Binding ResolvePc}">
+                <StackPanel>
+                  <Grid HorizontalAlignment="Left">
+                    <Border CornerRadius="6" Padding="8,3" Background="{x:Static local:SlotBrushes.GoodSoft}" Visibility="{Binding Newer, Converter={StaticResource Visible}}">
+                      <TextBlock Text="{Binding Pill}" FontSize="11" FontWeight="Black" Foreground="{x:Static local:SlotBrushes.Good}" />
+                    </Border>
+                    <Border Style="{StaticResource SmPill}" Visibility="{Binding Newer, Converter={StaticResource Hidden}}">
+                      <TextBlock Text="{Binding Pill}" FontSize="11" Foreground="{StaticResource InfinityMuted}" />
+                    </Border>
+                  </Grid>
+                  <TextBlock Text="{Binding Title}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" TextWrapping="Wrap" />
+                  <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SmCompareLines}" />
+                  <TextBlock Text="{Binding DataContext.S[sm.resolve.pc_replaces], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource SmHint}" FontSize="12"
+                             Margin="0,10,0,0" TextWrapping="Wrap" />
+                  <Button Content="{Binding ActionLabel}" Margin="0,12,0,0" HorizontalAlignment="Left" Click="OnResolveKeepPc"
+                          IsEnabled="{Binding DataContext.Idle, RelativeSource={RelativeSource AncestorType=Window}}">
+                    <Button.Style>
+                      <Style TargetType="Button" BasedOn="{StaticResource SmButton}">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Recommended}" Value="True">
+                            <Setter Property="Background" Value="{x:Static local:SlotBrushes.Azimuth}" />
+                            <Setter Property="Foreground" Value="#FF071018" />
+                            <Setter Property="FontWeight" Value="Bold" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
+                </StackPanel>
+              </Border>            </UniformGrid>
+            <Border Style="{StaticResource SmNote}" Visibility="{Binding ResolveHardcore, Converter={StaticResource Visible}}">
+              <TextBlock Text="{Binding S[sm.resolve_hc_note]}" Foreground="{StaticResource InfinityMuted}" TextWrapping="Wrap" />
+            </Border>
+            <Border Style="{StaticResource SmNote}" Visibility="{Binding ShowResolveBlocked, Converter={StaticResource Visible}}">
+              <TextBlock Text="{Binding GameRunningText}" Foreground="{StaticResource SmWarn}" TextWrapping="Wrap" />
+            </Border>
+            <TextBlock Text="{Binding Message}" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource SmWarn}" AutomationProperties.LiveSetting="Polite" />
+            <WrapPanel Margin="0,14,0,0" HorizontalAlignment="Right">
+              <Button x:Name="ResolveNotNow" Content="{Binding S[saves.conflict_not_now]}" Style="{StaticResource SmButton}" Click="OnCloseResolve" IsEnabled="{Binding Idle}" />
             </WrapPanel>
           </StackPanel>
         </ScrollViewer>

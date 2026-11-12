@@ -1273,7 +1273,6 @@
   "sm.crumb.home": "Saves",
   "sm.crumb.create": "Create profile",
   "sm.crumb.start": "Start career",
-  "sm.crumb.resolve": "Resolve",
   "sm.crumb.history": "History",
   "sm.crumb.delete": "Delete",
   "sm.crumb.help": "Help Sensei",
@@ -1650,5 +1649,10 @@
   "play.notice_more": "+{count} more",
   "play.crash_waiting": "The game crashed ({code}). Its report is waiting: get the logs or ignore it.",
   "copyask.backup_first": "Your current Azimuth save is backed up first (verified); the backup's exact path is shown when the copy is done. The save you copy from is only read.",
-  "export.copy_from_cloud": "old Noob cloud save of {name}"
+  "export.copy_from_cloud": "old Noob cloud save of {name}",
+  "play.stats_azimuth_none": "No save of this game yet",
+  "play.stats_azimuth_unreadable": "Save unreadable",
+  "play.stats_azimuth_no_folder": "Choose your Azimuth folder",
+  "sm.resolve.cloud_replaces": "Replaces this PC's save. This PC's save is backed up in History first.",
+  "sm.resolve.pc_replaces": "Nothing is written now. This PC's save goes to the cloud at your next Play; the cloud's current save stays in its history."
 }

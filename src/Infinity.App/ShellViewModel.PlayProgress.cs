@@ -35,7 +35,7 @@ public sealed partial class ShellViewModel
     /// (CR-L39), an Azimuth never opened, a mod confirmation and the sign-in form (OD-240: old Noob saves never prompt; Settings lists them).
     /// A new prompt is added here, nowhere else.
     /// </summary>
-    public bool AwaitingPlayer => PromptOpen || ShowCopyConfirm || ShowOldNoobNotice;
+    public bool AwaitingPlayer => PromptOpen || ShowCopyConfirm || ShowResolveConfirm || ShowOldNoobNotice;
 
     /// <summary>
     /// The prompts that come first. Owner 2026-11-12 (popups queue and never stack): a save copy's confirmation (<see cref="ShowCopyConfirm"/>)

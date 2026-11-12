@@ -23,6 +23,9 @@ public sealed record PlayButtonCard(string Mode, PlayButtonKind Kind, string Mod
     public bool HasStats => Stats.Length > 0;
     /// <summary>OD-240 #6: why the AZIMUTH level is "—" (its tooltip), null otherwise.</summary>
     public string? StatsTip { get; init; }
+
+    /// <summary>The line's tooltip: the full reason when there is one, else the line itself (it is ellipsized on a narrow card).</summary>
+    public string StatsHover => StatsTip ?? Stats;
     public bool HasNote => Note.Length > 0;
     public string Initial => Gamertag.Length > 0 ? Gamertag[..1].ToUpperInvariant() : "+";
     public bool IsPlay => Kind == PlayButtonKind.Play;
@@ -93,9 +96,12 @@ public sealed partial class ShellViewModel
             : slot.Kind is PlayButtonKind.Play or PlayButtonKind.Resolve ? slot.Card is { } started ? PlayStats(started.Career) : S["play.stats_local"]
             : string.Empty;
         var (enabled, reason) = PlayButtonEnabled(slot.Kind);
+        // owner 2026-11-12 (the card fits like HARDCORE's): AZIMUTH's line is short; the full sentence and the level's reason are its tooltip
+        var tip = slot.Mode == "hardcore" ? null
+            : string.Join("\n", new[] { AzimuthSaveStats().Long, AzimuthPlayLevel().Why }.OfType<string>()) is { Length: > 0 } why ? stats + "\n" + why : null;
         return new PlayButtonCard(slot.Mode, slot.Kind, mode, title, gamertag, stats, reason ?? note)
         {
-            Enabled = enabled, Row = row, StatsTip = slot.Mode != "hardcore" && AzimuthPlayLevel().Why is { } why ? stats + "\n" + why : null,
+            Enabled = enabled, Row = row, StatsTip = tip,
         };
     }
 
@@ -104,7 +110,7 @@ public sealed partial class ShellViewModel
     /// reads it (the cached scan, no disk read on navigation): its level, then "CR 15,858 · saved …"; when the save cannot be read, "Plays
     /// this PC's Azimuth save" with why. Never "No progress yet", never the server's progress.
     /// </summary>
-    private string AzimuthPlayStats() => AzimuthPlayLevel().Text + "  ·  " + AzimuthSaveStats();
+    private string AzimuthPlayStats() => AzimuthPlayLevel().Text + "  ·  " + AzimuthSaveStats().Short;
 
     /// <summary>
     /// OD-240 #6: the level of this PC's Azimuth save of the chosen game, read locally as the Profiles row reads it ("LV —" and why when it
@@ -124,17 +130,22 @@ public sealed partial class ShellViewModel
             ? (S.Format("play.stats_level", ("level", shown.ToString(SavesCulture))), null)
             : (S["play.stats_level_none"], S.Format("sm.level_why", ("why", S[level.Why ?? LocalLevels.NotKnown])));
     }
-    private string AzimuthSaveStats()
+    /// <summary>
+    /// The AZIMUTH card's save part: short on the card ("No save of this game yet"), the full sentence ("Plays this PC's Azimuth save (it holds
+    /// no save of this game yet)") for its tooltip, null when the save reads.
+    /// </summary>
+    private (string Short, string? Long) AzimuthSaveStats()
     {
-        if (SavesRootNow is not { } root) return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_no_install"]));
+        (string, string?) Why(string shortKey, string whyKey) => (S[shortKey], S.Format("play.stats_azimuth_why", ("why", S[whyKey])));
+        if (SavesRootNow is not { } root) return Why("play.stats_azimuth_no_folder", "play.azimuth_why_no_install");
         SaveProfile? save;
         try { save = SavesList(root).FirstOrDefault(s => s.IsOffline); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_unreadable"])); }
-        if (save is null) return S.Format("play.stats_azimuth_why", ("why", S["play.azimuth_why_none"]));
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveException) { return Why("play.stats_azimuth_unreadable", "play.azimuth_why_unreadable"); }
+        if (save is null) return Why("play.stats_azimuth_none", "play.azimuth_why_none");
         var modified = S.Format("play.stats_modified", ("when", When(save.LastPlayedUtc)));
-        return save.Credits is { } credits
+        return (save.Credits is { } credits
             ? S.Format("play.stats_credits", ("credits", credits.ToString("N0", SavesCulture))) + "  ·  " + modified
-            : S["play.stats_azimuth"] + "  ·  " + modified;
+            : S["play.stats_azimuth"] + "  ·  " + modified, null);
     }
 
     /// <summary>"LV 15 · CR 15,858 · 22h" from the career's progress; absent progress is "No progress yet" (level 0 is real).</summary>

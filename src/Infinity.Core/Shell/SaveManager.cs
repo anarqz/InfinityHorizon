@@ -15,10 +15,8 @@ public enum SavesScreen
     /// <summary>A profile with no career of the chosen game: Start fresh / from an existing profile / from this PC's save.</summary>
     Start,
 
-    /// <summary>Cloud vs this PC, side by side.</summary>
-    Resolve,
-
-    // owner 2026-11-12: a copy's Compare → Confirm is a centred popup over the screen it came from, no longer a screen of its own
+    // owner 2026-11-12: Resolve (cloud vs this PC) and a copy's Compare → Confirm are centred popups over the screen they came from,
+    // no longer screens of their own
 
     /// <summary>Owner 2026-11-11: "Use another save on this PC…", every save container of the game on this PC to pick the new Azimuth save from.</summary>
     Pick,
