@@ -672,6 +672,8 @@ public partial class MainWindow : Window
 
     private void OnDiscord(object sender, RoutedEventArgs e) => OpenCommunityLink("https://discord.gg/BqMVftFvXH");
 
+    private async void OnDonate(object sender, RoutedEventArgs e) => await _vm.OpenDonateAsync();
+
     // OD-149: the anti-cheat isolation's dispute link (the community Discord)
     private void OnPoolDispute(object sender, RoutedEventArgs e) => OpenCommunityLink(Infinity.Core.Matchmaking.AntiCheatPool.DisputeLink);
 

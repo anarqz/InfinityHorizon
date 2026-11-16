@@ -275,7 +275,8 @@
           <Button Style="{StaticResource NavButton}" Click="OnDiscord" AutomationProperties.Name="{Binding S[nav.discord]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[nav.discord]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
           <Border Height="1" Background="{StaticResource InfinityBorder}" Margin="20,8,8,8" />
           <Button Content="{Binding S[nav.account]}" Style="{StaticResource NavButton}" IsEnabled="{Binding CanChangeIdentity}" Click="OnNavAccount" Tag="{Binding ShowAccount}" />
-          <Button Content="{Binding S[nav.donate]}" Style="{StaticResource NavButton}" IsEnabled="{Binding InShell}" />
+          <!-- CR-L52: the Ko-fi page (links.kofi of GET /core/v1/me/support, else the owner's page) in the default browser -->
+          <Button Style="{StaticResource NavButton}" IsEnabled="{Binding InShell}" Click="OnDonate" AutomationProperties.Name="{Binding S[nav.donate]}"><StackPanel Orientation="Horizontal"><TextBlock Text="{Binding S[nav.donate]}" VerticalAlignment="Center" /><Path Data="{StaticResource IconExternal}" Style="{StaticResource InlineIcon}" Margin="6,0,0,0" /></StackPanel></Button>
           <TextBlock Text="{Binding ServerLabel}" Margin="20,14,0,0" FontSize="11" Foreground="{StaticResource InfinityFaint}" />
           <!-- CR-L40: the connected server's figures (online now, registered profiles in parentheses), read every 30 s -->
           <StackPanel Margin="20,4,0,0" Background="Transparent" ToolTip="{Binding ServerStatusTip}" ToolTipService.ShowOnDisabled="True"

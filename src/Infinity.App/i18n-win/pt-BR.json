@@ -1540,6 +1540,8 @@
   "busy.reading": "Lendo seu perfil…",
   "busy.history": "Carregando o histórico de saves…",
   "busy.refreshing": "Atualizando…",
+  "busy.donate": "Abrindo a página de doação…",
+  "donate.browser_failed": "O navegador não abriu a página de doação. Tente de novo.",
   "busy.mode_noob": "AZIMUTH",
   "busy.mode_hardcore": "HARDCORE",
   "busy.elapsed": "{seconds} s até agora",

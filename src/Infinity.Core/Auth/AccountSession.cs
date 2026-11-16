@@ -247,6 +247,10 @@ public sealed class AccountSession : IDisposable
     public Task<AccountLookupList> LookupAccountsAsync(string xuidOrGamertag, CancellationToken cancellation = default) =>
         Tokens.WithAccessAsync(access => Api.LookupAccountsAsync(access, xuidOrGamertag, cancellation), cancellation);
 
+    /// <summary>CR-L52: the account's support links (the Ko-fi page DONATE opens).</summary>
+    public Task<SupportInfo> SupportAsync(CancellationToken cancellation = default) =>
+        Tokens.WithAccessAsync(access => Api.SupportAsync(access, cancellation), cancellation);
+
     /// <summary>CR-S63: the account's Discord link and each live profile's announce switch.</summary>
     public Task<DiscordSettings> DiscordSettingsAsync(CancellationToken cancellation = default) =>
         Tokens.WithAccessAsync(access => Api.DiscordSettingsAsync(access, cancellation), cancellation);
