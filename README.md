@@ -120,6 +120,30 @@ The launcher installs ExtraOptions mods: one folder `<Azimuth>\mods\<game>\<id>\
 `mod.json`, described by a catalog manifest (packages, dependencies, settings). ExtraOptions loads
 their content and, through its PluginLoader, their plugins; the launcher has no mod runtime of its own.
 
+## Acknowledgements
+
+Infinity would not be possible without the outstanding work of the whole Forza Horizon 2
+community.
+
+- **Arthur (RokkuDayo), [Forza Horizon 2 Extra Options](https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions):**
+  his work provided the platform on which the very first Infinity proof of concept was built,
+  long ago. The hook infrastructure still derives from it (GPL-3.0-or-later; see
+  `native/hook/NOTICE.md`).
+- **Charelene, [FH2MP](https://github.com/Charelene/FH2MP):** a reference we drew on to speed up
+  our reverse-engineering work and to refine parts of Infinity itself.
+- **conner-mcvay and contributors, [fh2-mods](https://github.com/conner-mcvay/fh2-mods):** their
+  relay and online research guided the world protocol, and parts of the server are ported from
+  `fh2srv.py` under the MIT License (see [NOTICE](NOTICE) and `server/NOTICE`).
+
+### A note on collaboration
+
+With AI-assisted development, any piece of software can be studied, taken apart and rebuilt
+into something entirely different, faster than ever before. We believe the community gains far
+more from offering players many different options than from arguing over who came first, who
+is best, or who drew on whose work. Disputes over ownership of ideas only hold everyone back.
+We would rather build alongside the other projects, credit them openly, and keep moving forward
+together.
+
 ## License
 
 Infinity Launcher is free software, licensed under the
