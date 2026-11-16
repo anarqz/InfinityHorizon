@@ -3,8 +3,9 @@
 The server side of Infinity Horizon, and how to run it on your own machine: the account, game and
 save APIs (`services/platform`), the migrations and scheduled jobs (`services/cli`), the relay
 (`services/relay`) and the server directory (`services/beholder`), with their libraries in
-`crates/`. The world engine (lobbies and free-roam worlds) is `../native/worlds`. Licensed under
-AGPL-3.0 (`LICENSE`, `NOTICE`).
+`crates/`. The world engine (lobbies and free-roam worlds) is `../native/worlds`. This folder is
+licensed under AGPL-3.0 (`LICENSE`, `NOTICE` here); the rest of the repository (the launcher, the
+hook, the overlay and `native/worlds`) is GPL-3.0-only (the root `LICENSE`).
 
 With this folder you run a complete server on one machine with Docker: the API (every surface on
 one port), Postgres, the scheduled jobs and a small world node. Players sign in with the server's
@@ -33,7 +34,7 @@ Every command below runs from this folder (`server/` of the clone) unless it say
 - A machine that stays on while people play: Linux, or Windows/macOS with Docker Desktop. 4 GB of
   RAM and about 15 GB of free disk for the first build (the Rust build cache is most of it).
 - Docker Engine 26+ with Compose v2.24+ (`docker compose version`).
-- Python 3.10+ with `pefile`, for the game-data step only.
+- Python 3.11+ with `pefile`, for the game-data step only.
 - Your own Forza Horizon 2 PC install (the one Infinity plays). Only to serve Forza Motorsport 5
   too: the executable of your FM5 install (`forza_durango_release_final.exe`) and
   `FI_GAMES=fh2,fm5` in `.env`.
@@ -101,7 +102,9 @@ secrets later (an SMTP key, a tunnel token): never commit it.
 docker compose up -d --wait
 ```
 
-The first `up` builds two images (the server and the world node; 10 to 30 minutes). Then, in
+The first `up` builds two images (the server and the world node). A cold build's time and disk
+were not measured yet (estimate: 10 to 30 minutes and about 15 GB, most of it the Rust build
+cache; a warm rebuild takes about 2 minutes). Then, in
 order: `keys` writes every missing secret into the `keys` volume (never changing an existing one),
 `postgres` initialises its volume, `migrate` applies the migrations and creates the runtime logins
 and the pools, then `api` (healthy when `/health/ready` answers), `jobs` and `worlds` start. `keys`
@@ -115,7 +118,8 @@ curl -s http://192.0.2.10:8080/launcher/v1/info
 
 The answer must have `"apiVersion": 1`, your `realm` (`forzainfinity-selfhost` unless you changed
 `FI_REALM`), `"idp": {"kind": "local", ...}` and a `trust` object whose `launchTicket` and
-`relayGrant` lists are not empty (`kid:hex` entries). The launcher pins those keys on its first
+`relayGrant` lists are not empty (`kid:hex` entries), and `services` names your `FI_PUBLIC_URL`
+four times (core, gate, saves, matchmaking). The launcher pins those keys on its first
 connection. If `curl` cannot connect, see Troubleshooting.
 
 ## 5. World node
@@ -132,14 +136,15 @@ steps the first time:
 
    The line is `{"ev":"agent.started",...,"publicKey":"<44 characters>",...,"vmId":"home-1"}`.
 
-2. Put it in `.env`, with this machine's LAN address and the UDP port, then restart the api:
+2. Put it in `.env`, with this machine's LAN address and `FI_WORLDS_PORT` (5102 by default), then
+   apply it to every service:
 
    ```sh
    FI_WORLDS='[{"vmId":"home-1","publicKey":"<the publicKey>","endpoint":"192.0.2.10:5102","name":"Home","maxWorlds":8}]'
    ```
 
    ```sh
-   docker compose up -d --wait api
+   docker compose up -d --wait
    ```
 
 `vmId` and `maxWorlds` must match `FI_WORLDS_VM_ID` and `FI_WORLDS_MAX_WORLDS` (defaults `home-1`
@@ -155,7 +160,7 @@ traffic. The key never changes unless you delete the `worlds-key` volume; then r
 
 Optional, Road Trip worlds and the Hardcore parts rule: point `FI_WORLDS_CATALOG_DIR` at your
 install's `media/stripped` folder and set `FI_WORLDS_CATALOG=/catalog/gamedbRC.slt`, then
-`docker compose up -d worlds`.
+`docker compose up -d --wait`.
 
 ## 6. Point the launcher at your server
 
@@ -178,6 +183,11 @@ the launcher with an e-mail address and a password. With `FI_MAIL_BACKEND=log` (
 nothing is mailed: sign-up works at once and a forgotten password is reset by you (below). Once
 your accounts exist, you can close sign-up with `FI_REGISTRATION_ENABLED=false` and
 `docker compose up -d`.
+
+On a LAN every player counts as one client network (the same /24) for the sign-in limit (30
+sign-ins, sign-ups and token exchanges per 15 minutes per network). With more than a few players set
+`FI_LOCAL_LIMIT_SCALE=10` in `.env` (it multiplies the per-network sign-in and account-creation
+limits; 1 to 1000), then `docker compose up -d --wait`.
 
 Every career keeps working as in the game; Hardcore careers also keep a save line on the server
 (their saves are verified and stored in the `blobs` volume). A new Hardcore career starts from the
@@ -229,7 +239,10 @@ git pull --rebase
 docker compose up -d --wait --build
 ```
 
-Take a backup first. `migrate` applies new migrations before the new `api` starts (migrations only
+Take a backup first. Always apply a change to every service at once (`docker compose up -d --wait`,
+with `--build` after a source change), never one service: the services share one image tag, and a
+single-service `up` rebuilds the image but leaves the others on the old one. For the same reason run
+one server per Docker host; a second needs its own image names in its compose.yml. `migrate` applies new migrations before the new `api` starts (migrations only
 add), and `keys` adds any secret a newer release introduces without touching the existing ones. If
 a release adds a game-data file, run the extractor again (section 2); the server names a missing
 file when it refuses to start.
@@ -243,9 +256,11 @@ file when it refuses to start.
 | `curl` to the LAN address cannot connect, `127.0.0.1` works | `FI_BIND_ADDRESS` is still `127.0.0.1`, or the host firewall blocks TCP 8080. Change `.env`, `docker compose up -d`. |
 | The launcher says the server did not answer as an Infinity server should | The launcher was pointed at a different origin than `FI_PUBLIC_URL`, `FI_REALM` was set to the official name, or `/info` has no `trust` (compose.yml sets `FI_PUBLISH_TRUST_KEYS=true` on the api: keep it). |
 | `worlds` keeps logging `agent.unauthorized` with `"route":"hello"` (the api logs `mm_official_auth` refused) | `FI_WORLDS` is empty or its `vmId`/`publicKey` differ from the agent's: repeat section 5 and restart the api. |
-| `worlds` keeps logging `agent.http.failed` with `"kind":"network"` | The api is not running, or the pinned network's addresses were changed in only some places (Limits, last item). |
+| `worlds` keeps logging `agent.http.failed` with `"kind":"network"` | The api is not running, or the compose.yml addresses were edited by hand instead of through `FI_PINNED_PREFIX`. |
 | `worlds` exits with `agent.config.invalid` | The field it names is wrong (for example `FI_WORLDS_CATALOG` names a file that is not mounted). |
 | Players are placed in a world but never join it | The `FI_WORLDS` endpoint is `127.0.0.1` or not this machine's LAN address, or UDP 5102 is blocked by the host firewall. |
+| `up` fails with "Pool overlaps with other one on this address space" | Another network of the host uses `172.30.122.0/24`: set `FI_PINNED_PREFIX` in `.env` to a free one (for example `172.30.124`), then `docker compose up -d --wait`. |
+| Sign-in or sign-up answers `AUTH.RATE_LIMITED` (429, `Retry-After`) | Every LAN player shares one /24 for the sign-in limit: set `FI_LOCAL_LIMIT_SCALE=10` (section 7), `docker compose up -d --wait`, and wait for `Retry-After` once. |
 | The api refuses to start with `FI_MAIL_BACKEND=log` | The server looks public (https or a DNS name in `FI_PUBLIC_URL`, or `trusted-proxy`) with sign-up open: turn mail on or close registration (section 11). |
 | The launcher reports that the server's keys changed | The `keys` volume was recreated. Restore it from a backup, or tell players to accept the new keys. |
 
@@ -310,7 +325,7 @@ FI_PUBLIC_URL=https://infinity.example.com
 ```
 
 and run `docker compose --profile tunnel up -d --wait`. `FI_TRUSTED_PROXIES` can stay empty:
-the compose then trusts only the `cloudflared` container's fixed address, `172.30.122.10/32`. The
+the compose then trusts only the `cloudflared` container's fixed address, `<FI_PINNED_PREFIX>.10/32`. The
 world node's UDP port still has to be reachable directly by players (a tunnel carries only HTTP):
 forward UDP `FI_WORLDS_PORT` on your router and use your public address in the `FI_WORLDS`
 endpoint.
@@ -330,7 +345,6 @@ the server's keys.
   compromised server.
 - `FI_ENV=prod` refuses this configuration (local sign-in, file save storage): a self-hosted
   server runs with `FI_ENV=local`.
-- The pinned network `172.30.122.0/24` gives the api a fixed address for the world node. If it
-  clashes with a network of the host, change the subnet and the addresses that use it in
-  compose.yml together.
+- The pinned network (`FI_PINNED_PREFIX`, `172.30.122.0/24` by default) gives the api a fixed
+  address for the world node; change the prefix in `.env` if it clashes with a network of the host.
 - Not included: the web app, automated backups, several machines, monitoring.

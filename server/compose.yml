@@ -125,13 +125,13 @@ services:
       # `cloudflared` container's fixed address below, the one peer allowed to report a player's
       # address (CF-Connecting-IP). Not the whole subnet: Docker may hand published-port traffic
       # to the container from the network's gateway (.1), which would then be trusted too.
-      FI_TRUSTED_PROXIES: ${FI_TRUSTED_PROXIES:-172.30.122.10/32}
+      FI_TRUSTED_PROXIES: ${FI_TRUSTED_PROXIES:-${FI_PINNED_PREFIX:-172.30.122}.10/32}
     networks:
       default:
       pinned:
-        # The world node's FI_WORLDS_SERVER_URL below: the agent accepts plain http only for an
+        # The world node's FI_WORLDS_SERVER_URL below (FI_PINNED_PREFIX.20): the agent accepts plain http only for an
         # IP literal in a private range (or localhost), never a container name.
-        ipv4_address: 172.30.122.20
+        ipv4_address: ${FI_PINNED_PREFIX:-172.30.122}.20
     volumes:
       - keys:/keys:ro
       - blobs:/data/blobs
@@ -187,7 +187,7 @@ services:
     # Only these settings: no env_file, so none of the api's settings or secrets reach it.
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      FI_WORLDS_SERVER_URL: http://172.30.122.20:8080
+      FI_WORLDS_SERVER_URL: http://${FI_PINNED_PREFIX:-172.30.122}.20:8080
       FI_WORLDS_VM_ID: ${FI_WORLDS_VM_ID:-home-1}
       FI_WORLDS_KEY_FILE: /var/lib/worlds/node.key
       FI_WORLDS_BIND: 0.0.0.0:5102
@@ -247,7 +247,7 @@ services:
     networks:
       pinned:
         # FI_TRUSTED_PROXIES' default: keep both in step if you change the subnet below.
-        ipv4_address: 172.30.122.10
+        ipv4_address: ${FI_PINNED_PREFIX:-172.30.122}.10
     depends_on:
       api:
         condition: service_healthy
@@ -255,13 +255,12 @@ services:
 
 networks:
   default:
-  # A pinned subnet, so the api's and the tunnel's addresses are known. If it clashes with a
-  # network of the host, change it together with the api's and cloudflared's ipv4_address, the
-  # world node's FI_WORLDS_SERVER_URL and FI_TRUSTED_PROXIES' default.
+  # A pinned subnet, so the api's (.20) and the tunnel's (.10) addresses are known. If it clashes
+  # with a network of the host, set FI_PINNED_PREFIX in .env: every address below follows it.
   pinned:
     ipam:
       config:
-        - subnet: 172.30.122.0/24
+        - subnet: ${FI_PINNED_PREFIX:-172.30.122}.0/24
 
 volumes:
   # Generated secrets: back them up with the database. They hold the database passwords too, so
