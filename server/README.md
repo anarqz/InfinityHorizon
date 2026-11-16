@@ -247,6 +247,22 @@ add), and `keys` adds any secret a newer release introduces without touching the
 a release adds a game-data file, run the extractor again (section 2); the server names a missing
 file when it refuses to start.
 
+If your database was first migrated by a server older than commit f026266 (2026-11-16), the new
+`api` fails readiness on two migrations whose header comment was reworded (20261030170000 and
+20261031120000; the SQL is unchanged). Update their recorded checksums once, after the backup and
+before `docker compose up`:
+
+```sh
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d forza_infinity <<'SQL'
+UPDATE _sqlx_migrations SET checksum = decode('4fa42fc328dce437cccdd4697e9a8641717af38df0356cae9f660ff62c67bb04f0f8ba7cad5c4f65989524e510fcc56d', 'hex')
+ WHERE version = 20261030170000 AND checksum = decode('8c04b6de362ff634f3d1e130dd9ffc7be899acdefdab116814baa7f72ec4fcecf97ead020104632526ae13ccb7b550db', 'hex');
+UPDATE _sqlx_migrations SET checksum = decode('18ea988035ebb565b78fe9de6348f26a00ccaadb87f17a0c01c170bba48ea978fa35dd05bf67eaa5821f887f18138484', 'hex')
+ WHERE version = 20261031120000 AND checksum = decode('69c67c3efcb9a3e60bd7a59365fe6005365fcde86d75c83e49cfd684bd3cc51245d97ef1223e234a08738c94a4763e1f', 'hex');
+SQL
+```
+
+Each `UPDATE` reports 1 row on such a server and 0 on a newer one (nothing to do).
+
 ## 10. Troubleshooting
 
 | Symptom | Cause and fix |
