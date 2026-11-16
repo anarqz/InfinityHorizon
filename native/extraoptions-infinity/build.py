@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.4 made of ExtraOptions 0.6.0
-(native/extraoptions, a submodule pinned to upstream main 869b60e, the source of the 0.6.0 release;
-OD-233), Infinity's patch series (patches/*.patch, applied to a copy) and the ForzaInfinity hook
-(native/hook, built with FI_EO_BUILD and src/core/fi_rename.h).
+"""ExtraOptions.Infinity (OD-125): one winmm.dll for Azimuth 1.0.4 made of ExtraOptions 0.6.1
+(native/extraoptions, a submodule pinned to upstream main dae2380, the source of the 0.6.1 release's
+FH3DLCFix asset, byte-identical; OD-233), Infinity's patch series (patches/*.patch, applied to a copy)
+and the ForzaInfinity hook (native/hook, built with FI_EO_BUILD and src/core/fi_rename.h).
 
 The FM5 title profile (upstream fm5/, --fm5) is in the same DLL; see patches/0004. FH3 (--fh3) is
 not built. patches/0005 keeps the native route-activation gates in an online session and mirrors the
 online feature state into Show All Events' private gates (online Free Roam event markers, 2026-11-10).
-patches/0006 makes FM5's DisableParentalLocks write the native Allowed value 3, not the pending
-value 4, so FM5's MULTIPLAYER tile works with the option on (2026-11-11).
+FM5's DisableParentalLocks fix (the former patches/0006) is upstream since 0.6.1.
 
 Usage: python build.py /path/to/zig [--dev] [--build-dir DIR] [--output PATH]
 
