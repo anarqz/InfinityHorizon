@@ -39,7 +39,10 @@ pwsh -File build.ps1 -Zig C:\tools\zig\zig.exe
 
 `--recursive` fetches `native/extraoptions` (ExtraOptions, a submodule the hook is built into); in an
 existing clone, run `git submodule update --init native/extraoptions` once. The hook build applies
-Infinity's patches to a copy of it with `git apply`, so Git must be on `PATH`.
+Infinity's patches to a copy of it with `git apply`, so Git must be on `PATH`. Build from a git
+checkout (a clone, not a source ZIP or tarball): the hook's ExtraOptions label (e.g. `0.6.1+dae2380`) takes the
+pinned upstream commit from git, and the build stops when it cannot read it. The copy leaves out upstream's
+`release/` folder (its bundled mods); nothing from it is built or packaged.
 
 The output is `artifacts/win-x64/`: `infinity.exe` and `infinity-updater.exe` (self-contained .NET),
 `hook/infinity.dll`, `overlay/infinity-overlay.dll`, their development signatures,

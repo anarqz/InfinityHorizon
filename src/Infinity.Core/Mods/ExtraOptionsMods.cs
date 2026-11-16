@@ -20,7 +20,7 @@ public sealed record ExtraOptionsModStatus(ExtraOptionsModState State, IReadOnly
 
 /// <summary>
 /// OD-126: the launcher manages mods in ExtraOptions' own format, so a mod copied by hand and one from the catalog look the
-/// same. The rules are ExtraOptions 0.6.0's (<c>shared/addons.c</c>, <c>shared/addon_layout.h</c>, <c>docs/MODS.md</c>): each game has
+/// same. The rules are ExtraOptions 0.6.1's (<c>shared/addons.c</c>, <c>shared/addon_layout.h</c>, <c>docs/MODS.md</c>): each game has
 /// its own folder (<c>&lt;Azimuth&gt;\mods\Forza Horizon 2</c>, <c>…\Forza Motorsport 5</c>, <see cref="ExtraOptionsLayout"/>; <c>mods\Cache</c>
 /// is the loader's own); every folder in it but dot folders and links is a mod; its <c>loadorder.txt</c> (UTF-8, one folder per line,
 /// later = higher priority) enables a listed folder and disables one written <c># folder</c>; a folder it does not list is appended,
@@ -183,7 +183,7 @@ public static class ExtraOptionsMods
     /// The last game run's verdict per mod (keyed by id and by folder), from the <c>MODS:</c> and <c>PLUGINS:</c> lines of the game's log
     /// beside <c>azimuth.exe</c> (<see cref="LogFileFor"/>; ExtraOptions recreates it every start). No log: empty.
     /// <para>
-    /// The lines are ExtraOptions 0.6.0's: <c>MODS: &lt;id or folder&gt;: &lt;message&gt;</c> (<c>shared/addons.c</c> <c>report</c>) and
+    /// The lines are ExtraOptions 0.6.1's: <c>MODS: &lt;id or folder&gt;: &lt;message&gt;</c> (<c>shared/addons.c</c> <c>report</c>) and
     /// <c>PLUGINS: &lt;…&gt;\mods\&lt;game folder&gt;\&lt;folder&gt;\plugins\&lt;dll&gt; | &lt;result&gt;</c> (<c>shared/plugins.c</c> <c>log_plugin</c>); a
     /// path of the old flat layout (<c>…\mods\&lt;folder&gt;\…</c>, an older log) still names its folder.
     /// </para>
@@ -215,7 +215,7 @@ public static class ExtraOptionsMods
             }
             else if (line.StartsWith("PLUGINS: ", StringComparison.Ordinal) && line.IndexOf(" | ", StringComparison.Ordinal) is var bar and > 9)
             {
-                // PLUGINS: <...>\mods\<game folder>\<folder>\plugins[\<dll>] | <result> (0.6.0); <...>\mods\<folder>\... before it
+                // PLUGINS: <...>\mods\<game folder>\<folder>\plugins[\<dll>] | <result> (0.6.0 onwards); <...>\mods\<folder>\... before it
                 var path = line[9..bar].Replace('/', '\\');
                 var gameMark = "\\" + ModsFolder + "\\" + ExtraOptionsLayout.GameFolder(game) + "\\";
                 var mark = path.LastIndexOf(gameMark, StringComparison.OrdinalIgnoreCase);

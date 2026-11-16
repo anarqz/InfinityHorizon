@@ -56,7 +56,7 @@ public sealed partial class ShellViewModel
         Fm5LaunchState? fm5 = null;
         if (!game.FullFeatures)
         {
-            // OD-233: FM5's ExtraOptions 0.6.0 loads mods (catalog only) and reads its own ini with the server's locks
+            // OD-233: FM5's ExtraOptions (0.6.0 onwards) loads mods (catalog only) and reads its own ini with the server's locks
             if (mods is not null) fm5 = PrepareExtraOptionsMods(install, hardcore, mods);
             try { Log("extraoptions: " + ExtraOptionsInfinity.EnforceLocks(install.Root, game)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or Infinity.Core.Mods.ModException)

@@ -19,7 +19,7 @@ public sealed record ExtraOptionsLayoutResult(IReadOnlyList<string> Moved, IRead
 }
 
 /// <summary>
-/// OD-233: ExtraOptions 0.6.0 keeps each game's mods in its own folder (<c>shared/addon_layout.h</c>): <c>mods\Forza Horizon 2\&lt;id&gt;</c> and
+/// OD-233: ExtraOptions (0.6.0 onwards; 0.6.1 unchanged) keeps each game's mods in its own folder (<c>shared/addon_layout.h</c>): <c>mods\Forza Horizon 2\&lt;id&gt;</c> and
 /// <c>mods\Forza Motorsport 5\&lt;id&gt;</c>, each with its own <c>loadorder.txt</c>; <c>mods\Cache</c> is the loader's own cache (never a mod,
 /// never moved or synced), and <c>mods\Forza Horizon 3</c> is reserved. The launcher moves the old flat layout (<c>mods\&lt;id&gt;</c> and
 /// <c>mods\loadorder.txt</c>, ExtraOptions 0.4.4's) before a launch, per game, and a manifest destination written for the old layout
@@ -33,7 +33,7 @@ public static class ExtraOptionsLayout
     public const string CacheFolder = "Cache";
     private const int MaxLoadOrder = 64 * 1024;
 
-    /// <summary>The game's folder under <c>mods\</c>, as ExtraOptions 0.6.0 names it.</summary>
+    /// <summary>The game's folder under <c>mods\</c>, as ExtraOptions 0.6.1 names it.</summary>
     public static string GameFolder(string game) => game switch
     {
         "fh2" => Fh2Folder,

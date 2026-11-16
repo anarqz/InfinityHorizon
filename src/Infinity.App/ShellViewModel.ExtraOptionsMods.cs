@@ -204,7 +204,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task<IModSetSource> ExtraOptionsModSetAsync(AzimuthInstall install, DateTime launchUtc)
     {
-        // OD-233: each game's ExtraOptions loads its own mods folder (FM5's loader is new in 0.6.0)
+        // OD-233: each game's ExtraOptions loads its own mods folder (FM5's loader is new in 0.6.0, unchanged in 0.6.1)
         var game = CurrentGame.Id;
         if (!ExtraOptionsLayout.HasModsFolder(game)) return VanillaModSet.Instance;
         // FM5: the state read for this launch (PrepareExtraOptionsMods), as fresh as the folders it just arranged

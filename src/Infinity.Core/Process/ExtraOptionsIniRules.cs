@@ -4,7 +4,7 @@ using System.Text;
 namespace Infinity.Core.Process;
 
 /// <summary>
-/// OD-233: ExtraOptions 0.6.0 refuses to run (every feature off, "REFUSED: invalid INI section, option, or value") when
+/// OD-233: ExtraOptions 0.6.1 refuses to run (every feature off, "REFUSED: invalid INI section, option, or value") when
 /// <c>FH2_ExtraOptions.ini</c> breaks one rule of its parser, so every ini the launcher writes is checked against those rules first.
 /// <see cref="Fh2Problem"/> is <c>fh2/settings.c</c>'s <c>settings_read</c>/<c>parse_ini</c> and <c>fh2/bindings.c</c>'s
 /// <c>bindings_parse</c>, line for line (a test holds the setting table equal to the C source). FM5's <c>fm5/fm5.c</c> reads its ini through
@@ -90,7 +90,7 @@ public static class ExtraOptionsIniRules
         return game.Id == "fm5" ? Fm5Problem(bytes) : Fh2Problem(bytes);
     }
 
-    /// <summary>Why FH2's ExtraOptions 0.6.0 refuses these bytes as <c>FH2_ExtraOptions.ini</c>, or null when it reads them.</summary>
+    /// <summary>Why FH2's ExtraOptions 0.6.1 refuses these bytes as <c>FH2_ExtraOptions.ini</c>, or null when it reads them.</summary>
     public static string? Fh2Problem(byte[] bytes)
     {
         ArgumentNullException.ThrowIfNull(bytes);
@@ -147,7 +147,7 @@ public static class ExtraOptionsIniRules
     }
 
     /// <summary>
-    /// Why FM5's ExtraOptions 0.6.0 would not take a value of these bytes as written (<c>FM5_ExtraOptions.ini</c>): every
+    /// Why FM5's ExtraOptions 0.6.1 would not take a value of these bytes as written (<c>FM5_ExtraOptions.ini</c>): every
     /// <c>key=value</c> of a section it reads as a switch must be exactly <c>0</c> or <c>1</c> (anything else is logged and the feature's
     /// default used), and the file is ASCII or UTF-8 without NUL bytes. Null when it reads every value.
     /// </summary>
@@ -181,7 +181,7 @@ public static class ExtraOptionsIniRules
     }
 
     /// <summary>
-    /// The settings <c>fm5/fm5.c</c> reads with <c>GetPrivateProfileIntW</c> (0.6.0): the local Drivatar liveries switch and the lineup cap
+    /// The settings <c>fm5/fm5.c</c> reads with <c>GetPrivateProfileIntW</c> (0.6.1): the local Drivatar liveries switch and the lineup cap
     /// (the ini's own comment: 0-16), with the largest value the launcher writes.
     /// </summary>
     public static readonly IReadOnlyList<(string Section, string Key, uint Maximum)> Fm5Numbers =
@@ -189,7 +189,7 @@ public static class ExtraOptionsIniRules
         ("Experiments", "LocalDrivatarLiveries", 1), ("Experiments", "MaxDrivatarLiveries", 16),
     ];
 
-    /// <summary>The switches <c>fm5/fm5.c</c> reads with <c>option()</c> (0.6.0, before Infinity's patch 0004 removes OfflineVIP).</summary>
+    /// <summary>The switches <c>fm5/fm5.c</c> reads with <c>option()</c> (0.6.1, before Infinity's patch 0004 removes OfflineVIP).</summary>
     public static readonly IReadOnlyList<(string Section, string Key)> Fm5Switches =
     [
         ("Global", "Enabled"), ("Frontend", "SkipIntro"), ("Frontend", "EnableMarketplace"), ("Compatibility", "DisableParentalLocks"),

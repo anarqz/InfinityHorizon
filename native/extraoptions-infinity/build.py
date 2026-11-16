@@ -95,7 +95,15 @@ def prepare_extraoptions(directory):
     if not (EXTRAOPTIONS / "build.py").is_file():
         raise SystemExit("native/extraoptions is empty: in the client checkout run "
                          "git submodule update --init native/extraoptions (or clone it with --recursive)")
-    shutil.copytree(EXTRAOPTIONS, tree, ignore=shutil.ignore_patterns(".git"))
+    # Upstream's release/ (bundled mods with game-derived FM5 textures, AGENTS rule 3) is never copied: the
+    # build does not read it, nothing from it may ship, and its deep paths break Windows copies (WinError 206).
+    def ignore(directory, names):
+        skipped = {".git"}
+        if Path(directory).resolve() == EXTRAOPTIONS.resolve():
+            skipped.add("release")
+        return [name for name in names if name in skipped]
+
+    shutil.copytree(EXTRAOPTIONS, tree, ignore=ignore)
     # git apply, not GNU patch: Git for Windows ships no patch.exe, and git apply takes no fuzz, so
     # every platform applies the series byte for byte. The ceiling keeps it out of any repository
     # above the copy (inside one it would resolve the paths against that work tree instead).

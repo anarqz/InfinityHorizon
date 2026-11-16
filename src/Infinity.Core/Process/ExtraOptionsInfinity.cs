@@ -9,14 +9,14 @@ namespace Infinity.Core.Process;
 /// (<c>native/extraoptions-infinity/FH2_ExtraOptions.ini</c>, embedded) when there is none. A file the player already has
 /// is kept: the settings the Infinity server decides are forced off by ExtraOptions.Infinity itself (patch 0002, 0004 for FM5), and the
 /// launcher writes them off too before every launch (<see cref="EnforceLocks"/>). OD-233: every ini the launcher writes passes
-/// ExtraOptions 0.6.0's own parser rules (<see cref="ExtraOptionsIniRules"/>), since an invalid one turns every feature off.
+/// ExtraOptions 0.6.1's own parser rules (<see cref="ExtraOptionsIniRules"/>), since an invalid one turns every feature off.
 /// </summary>
 public static class ExtraOptionsInfinity
 {
     public const string IniFile = "FH2_ExtraOptions.ini";
 
-    /// <summary>The upstream ExtraOptions release ExtraOptions.Infinity is built from (<c>native/extraoptions</c>, MOD_VERSION).</summary>
-    public const string ExtraOptionsVersion = "0.6.0";
+    /// <summary>The upstream ExtraOptions release ExtraOptions.Infinity is built from (<c>native/extraoptions</c>): MOD_VERSION plus the pinned upstream commit, the hook's FI_EO_SUPPORTED label (T-1116).</summary>
+    public const string ExtraOptionsVersion = "0.6.1+dae2380";
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ModManifest> Manifests = new();
 
