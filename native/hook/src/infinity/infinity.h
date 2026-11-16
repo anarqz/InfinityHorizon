@@ -472,16 +472,18 @@ int fi_tier_foreign_route(const wchar_t *method, const wchar_t *url, unsigned lo
 
 /* The ExtraOptions build headlight and roof sync supports: the player's ExtraOptions 0.2.98 (the
    TLS-helper hook on Azimuth 0.9.10), or, in ExtraOptions.Infinity (FI_EO_BUILD, OD-125/OD-127,
-   Azimuth 1.0.4), the ExtraOptions 0.6.0 linked into this same winmm.dll: its version resource
-   (FILEVERSION 0.6.0.0) and its Fh2TweaksStatus are this module's own. FI_EO_NAME is for
-   infinity.log, FI_EO_SHOWN for the player (azimuth_tr's tables are keyed by it, lang.c);
-   FI_EO_W makes a wide literal of either. */
+   Azimuth 1.0.4), the ExtraOptions 0.6.1 linked into this same winmm.dll: its version resource
+   (FILEVERSION 0.6.1.0) and its Fh2TweaksStatus are this module's own. The gate compares only
+   that numeric FILEVERSION (FI_EO_SUPPORTED_MS/LS, eo_detect.c); FI_EO_SUPPORTED is the label
+   (the release plus the pinned upstream commit, T-1116), which build.py checks against its own
+   ProductVersion. FI_EO_NAME is for infinity.log, FI_EO_SHOWN for the player (azimuth_tr's tables
+   are keyed by it, lang.c); FI_EO_W makes a wide literal of either. */
 #ifdef FI_EO_BUILD
 #define FI_EO_SUPPORTED_MS 0x00000006u
-#define FI_EO_SUPPORTED_LS 0x00000000u
-#define FI_EO_SUPPORTED "0.6.0"
-#define FI_EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.6.0)"
-#define FI_EO_SHOWN "ExtraOptions.Infinity (ExtraOptions v0.6.0)"
+#define FI_EO_SUPPORTED_LS 0x00010000u
+#define FI_EO_SUPPORTED "0.6.1+dae2380"
+#define FI_EO_NAME "ExtraOptions.Infinity (ExtraOptions 0.6.1+dae2380)"
+#define FI_EO_SHOWN "ExtraOptions.Infinity (ExtraOptions v0.6.1+dae2380)"
 #else
 #define FI_EO_SUPPORTED_MS 0x00000002u
 #define FI_EO_SUPPORTED_LS 0x00620000u

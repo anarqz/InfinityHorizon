@@ -379,7 +379,7 @@ static void cfg_read_hook(FiConfig *c) {
     if (cfg_lookup(L"hook", L"Server", v, ARRAY_COUNT(v), 0) && v[0]) {
         if (wequal(v, CFG_RETIRED_SERVER)) {
             /* the default an older hook wrote, a host that no longer exists: the current default */
-            cfg_note("CFG: [hook] Server is the retired Beta host; using https://api.infinity-horizon.com.\r\n");
+            cfg_note("CFG: [hook] Server is a retired host; using https://api.infinity-horizon.com.\r\n");
         } else if (cfg_server_ok(v) && wlen(v) < ARRAY_COUNT(c->server)) {
             wcopy(c->server, ARRAY_COUNT(c->server), v, wlen(v));
         } else {

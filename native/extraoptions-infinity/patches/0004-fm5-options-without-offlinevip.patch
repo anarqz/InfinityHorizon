@@ -48,13 +48,10 @@
      if(!value[0]){value[0]=default_value?L'1':L'0';value[1]=0;}
      if (value[0] == L'0' && !value[1]) return 0;
      if (value[0] == L'1' && !value[1]) return 1;
-@@ -160,22 +166,6 @@
-     fm5_badge_files(filesystem);
-     write_log(override && pc ? "FILES: native mounts ready: mediaoverride > mediapc > original media.\r\n"
-                             : "FILES: an override mount failed; native asset fallback retained.\r\n");
--    return result;
--}
--
+@@ -163,22 +169,6 @@
+     return result;
+ }
+ 
 -static int load_profile(void *profile, void *owner, unsigned mode) {
 -    int result = ((LoadProfile)(image + 0x1a0490))(profile, owner, mode);
 -    if (result == 0) {
@@ -68,11 +65,14 @@
 -        ((SetVip)(image + 0x1a12f0))(profile, (unsigned char)(flags | 1));
 -        write_log("VIP: local profile loaded; native VIP value and gamer flag synchronized.\r\n");
 -    }
-     return result;
- }
- 
-@@ -292,24 +282,9 @@
-             {0xc7,0x41,0x3c,4,0,0,0,0xc3,0x90,0x90}, 0};
+-    return result;
+-}
+-
+ /* Startup-only transaction: check every enabled site before making any changes,
+    acquire all write permissions first, and restore original bytes on failure. */
+ static int apply(Site *sites, unsigned count) {
+@@ -297,24 +287,9 @@
+             {0xc7,0x41,0x3c,3,0,0,0,0xc3,0x90,0x90}, 0};
          write_log("PARENTAL: local UGC and multiplayer privileges allowed.\r\n");
      }
 -    if (option(L"Content", L"OfflineVIP")) {
@@ -99,7 +99,7 @@
      unsigned mod_sites=option(L"Mods",L"Enabled")?fm5_mods_prepare(game,sites+count,executable,directory,option(L"Mods",L"DatabaseCache")):0;
      count+=mod_sites;override_folders_enabled=option(L"Files",L"EnableMediaOverrides");
      {
-@@ -359,12 +334,10 @@
+@@ -364,12 +339,10 @@
      if (local_liveries)
          write_log(livery_sites ? "LOCAL DESIGNS: FM5 local Drivatar liveries enabled.\r\n"
                                 : "LOCAL DESIGNS: FM5 local Drivatar liveries unavailable. Check the lineup cap and save path.\r\n");
