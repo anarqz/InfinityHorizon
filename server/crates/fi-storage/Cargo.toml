@@ -1,0 +1,34 @@
+# Cloud Storage adapter of the cloud-saves bucket (CLOUD_SAVES.md §6): create-only puts under
+# `blobs/sha256/<hex>`, gets re-hashed by the caller, the Storage emulator (fake-gcs-server) locally
+# and Cloud Storage with the metadata server's credentials on Cloud Run. Skeleton of the local environment v0
+# (docs/server/LOCAL_ENV.md §9, built by workstream A): the public shape is fixed so the
+# simulator's checker can compile against it.
+[package]
+name = "fi-storage"
+version = "0.0.0"
+description = "ForzaInfinity Cloud Storage adapter: the content-addressed save blob store over the JSON API (emulator locally)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fi-saves = { path = "../fi-saves" }
+# Object names hold `/`, which the JSON API wants percent-encoded in the path.
+percent-encoding = "=2.3.2"
+# The emulator speaks http; Cloud Storage and the token of the metadata server are https and
+# http: rustls with the platform verifier (the distroless image's CA certificates).
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+# The `fs` backend (OD-122): file I/O off the async threads.
+tokio = { version = "=1.53.3", features = ["fs", "rt"] }
+
+[dev-dependencies]
+# The emulator tests (#[ignore], fake-gcs) run on a Tokio runtime like the services.
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

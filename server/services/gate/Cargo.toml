@@ -1,0 +1,36 @@
+# fi-gate: the gate deployable of platform v1 (ADR 0013, ADR 0015; docs/contracts/GATE_API.md):
+# admission per game and pool, the game access ticket, heartbeats, leave, the public queue summary
+# and the internal pool list, plus fi-api's /launcher/v1/sessions* routes as aliases (CR-S11).
+[package]
+name = "fi-gate"
+version = "0.0.0"
+description = "ForzaInfinity gate: queue, game access tickets, heartbeats and leave (/gate/v1), with the /launcher/v1/sessions aliases."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "query", "matched-path", "tracing"] }
+# The extractors, error envelope, configuration and the session aliases of the account plane.
+fi-surfaces = { path = "../../crates/fi-surfaces" }
+fi-auth = { path = "../../crates/fi-auth" }
+fi-db = { path = "../../crates/fi-db" }
+fi-domain = { path = "../../crates/fi-domain" }
+fi-protocol = { path = "../../crates/fi-protocol" }
+fi-runtime = { path = "../../crates/fi-runtime" }
+fi-saves = { path = "../../crates/fi-saves" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tracing = "=0.1.44"
+uuid = { version = "=1.28.0", features = ["v7"] }
+
+[dev-dependencies]
+fi-content = { path = "../../crates/fi-content" }
+tower = { version = "=0.5.3", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

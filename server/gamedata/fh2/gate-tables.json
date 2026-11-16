@@ -1,0 +1,5 @@
+{
+ "blockedCars": [283, 286, 379, 414, 428, 631, 1047, 1082, 1089, 1127, 1257, 1358, 1363, 1364, 1383, 1393, 1674],
+ "source": "blockedCars: the traffic cars of Data_Car no player may drive; statsCeilings: [scoreType, max] of the enforced scoreboard-type-4 stats boards",
+ "statsCeilings": [[7, 657], [8, 10], [9, 150], [10, 315], [12, 63], [14, 50]]
+}

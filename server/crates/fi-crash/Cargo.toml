@@ -1,0 +1,18 @@
+[package]
+name = "fi-crash"
+version = "0.0.0"
+description = "Bounded metadata-only crash diagnostics; no dump intake or automatic sanctions."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fi-protocol = { path = "../fi-protocol" }
+serde_json = "=1.0.154"
+sha2 = "=0.11.1"
+uuid = { version = "=1.28.0", features = ["v7"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

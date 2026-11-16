@@ -1,0 +1,9 @@
+# Context of docker/relay.Dockerfile (context: the server folder): the Cargo workspace only.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/**
+!services/**
+**/target
+**/.env
+**/.env.*

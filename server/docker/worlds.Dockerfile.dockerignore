@@ -1,0 +1,6 @@
+# Context of docker/worlds.Dockerfile (context: the client repository's root): the world engine's
+# crate only, without its tests or a local target directory.
+**
+!native/worlds/Cargo.toml
+!native/worlds/Cargo.lock
+!native/worlds/src/**

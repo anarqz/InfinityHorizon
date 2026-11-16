@@ -1,0 +1,43 @@
+# Cloud saves v2 core (ADR 0005, docs/server/CLOUD_SAVES.md): play-session leases with fencing
+# tokens, revision compare-and-swap, the store trait with an in-memory implementation, the FH2SAVE1
+# bundle format and its integrity checks, the Hardcore gates, and the client sync decision.
+# No I/O and no runtime: it builds for the launcher's x86_64-pc-windows-gnu target too.
+[package]
+name = "fi-saves"
+version = "0.0.0"
+description = "ForzaInfinity cloud saves core: leases, fencing, revision CAS, stores, bundle integrity, gates, sync decisions."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The store conformance suite (conformance.rs): the same scenarios run against every SaveStore.
+testkit = ["dep:tokio"]
+
+[dependencies]
+fi-domain = { path = "../fi-domain" }
+# The Hardcore guardrails (OD-62): rates, ceilings and the anomaly score of an upload. Std only,
+# no game data, so it builds into the launcher too.
+fi-guard = { path = "../fi-guard" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.11.1"
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"], optional = true }
+uuid = { version = "=1.28.0", features = ["v7"] }
+
+# A normal (not dev) dependency, because src/primitives.rs swaps the store's mutex for loom's.
+[target.'cfg(fi_loom)'.dependencies]
+loom = "=0.7.2"
+
+[dev-dependencies]
+proptest = "=1.12.0"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+# `--cfg fi_loom` builds the model-checked variant of the in-memory store (tests/loom.rs). A
+# crate-specific name, so tokio and the rest of the graph are not switched to their loom paths.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fi_loom)"] }

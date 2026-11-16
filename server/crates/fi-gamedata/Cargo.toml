@@ -1,0 +1,26 @@
+# The operator's game data directory (T-1115, OD-247 Q3): the server compiles and ships with no
+# game-derived file. Every table read from the game (web-service schemas, catalog, economy, the
+# save's DDL...) is a file of the directory `FI_GAME_DATA_DIR` names, listed with its SHA-256 in
+# its `manifest.json`, read once at start; `tools/gamedata` rebuilds it from the operator's own game
+# install. Std, serde and sha2 only: no game data here.
+[package]
+name = "fi-gamedata"
+version = "0.0.0"
+description = "ForzaInfinity game data directory: the manifest-checked, runtime-loaded files the game plane reads (FI_GAME_DATA_DIR)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Exact pins (the porthub saveExact rule); versions match the other workspace crates.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.11.1"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

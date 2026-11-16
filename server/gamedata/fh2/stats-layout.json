@@ -1,0 +1,1729 @@
+{
+ "source": "docs/web/PLAY_STATS_SCREEN.md (T-PD-S2), tools/gamedata/fh2_stats_layout.py",
+ "tabs": [
+  {
+   "rows": [
+    {
+     "computed": "overallCompletion",
+     "format": "percent",
+     "ids": "IDS_Stat_OverallCompletion",
+     "index": "0x00",
+     "key": "overallCompletion"
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Display_Time_Driven",
+     "index": "0x01",
+     "key": "timeDriven",
+     "path": "playerRaceHistory[0].timeDriven",
+     "profilePaths": [
+      "Main/TimeDriven"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Display_Num_Races",
+     "index": "0x02",
+     "key": "numRaces",
+     "path": "playerRaceHistory[0].numRaces",
+     "profilePaths": [
+      "Main/NumRaces"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Display_Num_Podiums",
+     "index": "0x03",
+     "key": "numPodiums",
+     "path": "playerRaceHistory[0].numPodiums",
+     "profilePaths": [
+      "Main/NumPodiums"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Display_Num_Victories",
+     "index": "0x04",
+     "key": "numVictories",
+     "path": "playerRaceHistory[0].numVictories",
+     "profilePaths": [
+      "Main/NumVictories"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Cars_In_Garage",
+     "index": "0x05",
+     "key": "carsInGarage",
+     "path": "compareStats[0].carsInGarage",
+     "profilePaths": [
+      "CompareStats/CarsInGarage"
+     ]
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Garage_Value",
+     "index": "0x06",
+     "key": "garageValue",
+     "path": "compareStats[0].garageValue",
+     "profilePaths": [
+      "CompareStats/GarageValue"
+     ]
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Garage_Parts_Value",
+     "index": "0x07",
+     "key": "garagePartsValue",
+     "path": "miscStats[0].garagePartsValue",
+     "profilePaths": [
+      "MiscStats/GaragePartsValue"
+     ]
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Display_Total_Winnings",
+     "index": "0x08",
+     "key": "totalWinnings",
+     "path": "playerRaceHistory[0].totalWinnings",
+     "profilePaths": [
+      "Main/TotalWinnings"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TotalXP",
+     "index": "0x09",
+     "key": "totalXP",
+     "path": "playerRaceHistory[0].xp",
+     "profilePaths": [
+      "Main/XP"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeInFirstPlace",
+     "index": "0x0a",
+     "key": "timeInFirstPlace",
+     "path": "compareStats[0].timeInFirstPlace",
+     "profilePaths": [
+      "CompareStats/TimeInFirstPlace"
+     ]
+    },
+    {
+     "format": "car",
+     "ids": "IDS_Stat_FavoriteCar",
+     "index": "0x0b",
+     "key": "favoriteCar",
+     "path": "miscStats[0].favouriteCar",
+     "profilePaths": [
+      "MiscStats/FavouriteCar"
+     ]
+    },
+    {
+     "format": "car",
+     "ids": "IDS_Stat_MostValuableCar",
+     "index": "0x0c",
+     "key": "mostValuableCar",
+     "path": "miscStats[0].mostValuableCar",
+     "profilePaths": [
+      "MiscStats/MostValuableCar"
+     ]
+    },
+    {
+     "format": "car",
+     "ids": "IDS_Stat_MostSuccessfulCar",
+     "index": "0x0d",
+     "key": "mostSuccessfulCar",
+     "path": "miscStats[0].mostSuccessfulCar",
+     "profilePaths": [
+      "MiscStats/MostSuccessfulCar"
+     ]
+    },
+    {
+     "format": "radio",
+     "ids": "IDS_Stat_FavoriteRadioStation",
+     "index": "0x0e",
+     "key": "favoriteRadioStation",
+     "path": "miscStats[0].favouriteRadioStation",
+     "profilePaths": [
+      "MiscStats/FavouriteRadioStation"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_PhotosTaken",
+     "index": "0x0f",
+     "key": "photosTaken",
+     "path": "miscStats[0].photosTaken",
+     "profilePaths": [
+      "MiscStats/PhotosTaken"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_PhotoChallengesCompleted",
+     "index": "0x7a",
+     "key": "photoChallengesCompleted",
+     "path": "compareStats[0].photoChallengesCompleted",
+     "profilePaths": [
+      "CompareStats/PhotoChallengesCompleted"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_LiveriesShared",
+     "index": "0x10",
+     "key": "liveriesShared",
+     "path": "miscStats[0].liveriesShared",
+     "profilePaths": [
+      "MiscStats/LiveriesShared"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TuningSetupsShared",
+     "index": "0x11",
+     "key": "tuningSetupsShared",
+     "path": "miscStats[0].tuningSetupsShared",
+     "profilePaths": [
+      "MiscStats/TuningSetupsShared"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TimesSpokenToAnna",
+     "index": "0x12",
+     "key": "timesSpokenToAnna",
+     "path": "miscStats[0].timesSpokenToAnna",
+     "profilePaths": [
+      "MiscStats/TimesSpokenToAnna"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_RivalsBeaten",
+     "index": "0x13",
+     "key": "rivalsBeaten",
+     "path": "compareStats[0].rivalsBeaten",
+     "profilePaths": [
+      "CompareStats/RivalsBeaten"
+     ]
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Stat_CreditsEarnedFromRivals",
+     "index": "0x14",
+     "key": "creditsEarnedFromRivals",
+     "path": "compareStats[0].creditsEarnedFromRivals",
+     "profilePaths": [
+      "CompareStats/CreditsEarnedFromRivals"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_NumCleanOvertakes",
+     "index": "0x15",
+     "key": "numCleanOvertakes",
+     "path": "compareStats[0].numCleanOvertakes",
+     "profilePaths": [
+      "CompareStats/NumCleanOvertakes"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_HighestNumberOfCollisionsInARace",
+     "index": "0x16",
+     "key": "highestNumberOfCollisionsInARace",
+     "path": "compareStats[0].highestNumCollisionsInRace",
+     "profilePaths": [
+      "CompareStats/HighestNumCollisionsInRace"
+     ]
+    },
+    {
+     "format": "average",
+     "ids": "IDS_Stat_AvgNumberCollisionsInARace",
+     "index": "0x17",
+     "key": "avgNumberCollisionsInARace",
+     "profilePaths": [
+      "MiscStats/TotalCollisions",
+      "Main/NumRaces"
+     ],
+     "ratio": {
+      "a": "miscStats[0].totalCollisions",
+      "b": "playerRaceHistory[0].numRaces",
+      "kind": "quotient"
+     }
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CleanLaps",
+     "index": "0x18",
+     "key": "cleanLaps",
+     "path": "compareStats[0].cleanLaps",
+     "profilePaths": [
+      "CompareStats/CleanLaps"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_RaceEncountersEntered",
+     "index": "0x19",
+     "key": "raceEncountersEntered",
+     "path": "compareStats[0].raceEncountersEntered",
+     "profilePaths": [
+      "CompareStats/RaceEncountersEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_RaceEncountersWon",
+     "index": "0x1a",
+     "key": "raceEncountersWon",
+     "path": "compareStats[0].raceEncountersWon",
+     "profilePaths": [
+      "CompareStats/RaceEncountersWon"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeInRaceEncounters",
+     "index": "0x1b",
+     "key": "timeInRaceEncounters",
+     "path": "miscStats[0].timeInRaceEncounters",
+     "profilePaths": [
+      "MiscStats/TimeInRaceEncounters"
+     ]
+    }
+   ],
+   "tab": "general"
+  },
+  {
+   "rows": [
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlineRacesEntered",
+     "index": "0x1c",
+     "key": "onlineRacesEntered",
+     "path": "miscStats[0].onlineRacesEntered",
+     "profilePaths": [
+      "MiscStats/OnlineRacesEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlinePodiumFinishes",
+     "index": "0x1d",
+     "key": "onlinePodiumFinishes",
+     "path": "miscStats[0].onlinePodiumFinishes",
+     "profilePaths": [
+      "MiscStats/OnlinePodiumFinishes"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlineRacesWon",
+     "index": "0x1e",
+     "key": "onlineRacesWon",
+     "path": "compareStats[0].onlineRacesWon",
+     "profilePaths": [
+      "CompareStats/OnlineRacesWon"
+     ]
+    },
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_OnlineWinPercentage",
+     "index": "0x1f",
+     "key": "onlineWinPercentage",
+     "profilePaths": [
+      "CompareStats/OnlineRacesWon",
+      "MiscStats/OnlineRacesEntered"
+     ],
+     "ratio": {
+      "a": "compareStats[0].onlineRacesWon",
+      "b": "miscStats[0].onlineRacesEntered",
+      "kind": "percent"
+     }
+    },
+    {
+     "format": "average",
+     "ids": "IDS_Stat_OnlineAverageFinishingPosition",
+     "index": "0x20",
+     "key": "onlineAverageFinishingPosition",
+     "profilePaths": [
+      "MiscStats/OnlineCumulativeFinishPos",
+      "MiscStats/OnlineRacesEntered"
+     ],
+     "ratio": {
+      "a": "miscStats[0].onlineCumulativeFinishPos",
+      "b": "miscStats[0].onlineRacesEntered",
+      "kind": "quotient"
+     }
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Stat_OnlineWinnings",
+     "index": "0x21",
+     "key": "onlineWinnings",
+     "path": "compareStats[0].onlineWinnings",
+     "profilePaths": [
+      "CompareStats/OnlineWinnings"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlineXP",
+     "index": "0x22",
+     "key": "onlineXP",
+     "path": "compareStats[0].onlineXP",
+     "profilePaths": [
+      "CompareStats/OnlineXP"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeSpentInOnlineFreeroam",
+     "index": "0x23",
+     "key": "timeSpentInOnlineFreeroam",
+     "path": "miscStats[0].onlineTimeSpentInFreeroam",
+     "profilePaths": [
+      "MiscStats/OnlineTimeSpentInFreeroam"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlineRoadTripDestCompleted",
+     "index": "0x24",
+     "key": "onlineRoadTripDestCompleted",
+     "path": "compareStats[0].onlineRoadTripDestsCompleted",
+     "profilePaths": [
+      "CompareStats/OnlineRoadTripDestsCompleted"
+     ]
+    },
+    {
+     "format": "distance",
+     "ids": "IDS_Stat_OnlineRoadTripDistanceDriven",
+     "index": "0x25",
+     "key": "onlineRoadTripDistanceDriven",
+     "path": "miscStats[0].onlineRoadTripDistanceDriven",
+     "profilePaths": [
+      "MiscStats/OnlineRoadTripDistanceDriven"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TeamRacesEntered",
+     "index": "0x26",
+     "key": "teamRacesEntered",
+     "path": "miscStats[0].onlineTeamRacesEntered",
+     "profilePaths": [
+      "MiscStats/OnlineTeamRacesEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TeamRacesWon",
+     "index": "0x27",
+     "key": "teamRacesWon",
+     "path": "miscStats[0].onlineTeamRacesWon",
+     "profilePaths": [
+      "MiscStats/OnlineTeamRacesWon"
+     ]
+    },
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_TeamRaceWinPercentage",
+     "index": "0x28",
+     "key": "teamRaceWinPercentage",
+     "profilePaths": [
+      "MiscStats/OnlineTeamRacesWon",
+      "MiscStats/OnlineTeamRacesEntered"
+     ],
+     "ratio": {
+      "a": "miscStats[0].onlineTeamRacesWon",
+      "b": "miscStats[0].onlineTeamRacesEntered",
+      "kind": "percent"
+     }
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlineStreetRacesEntered",
+     "index": "0x29",
+     "key": "onlineStreetRacesEntered",
+     "path": "miscStats[0].onlineStreetRacesEntered",
+     "profilePaths": [
+      "MiscStats/OnlineStreetRacesEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_OnlineStreetRacesWon",
+     "index": "0x2a",
+     "key": "onlineStreetRacesWon",
+     "path": "miscStats[0].onlineStreetRacesWon",
+     "profilePaths": [
+      "MiscStats/OnlineStreetRacesWon"
+     ]
+    },
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_OnlineStreetRaceWin_Percentage",
+     "index": "0x2b",
+     "key": "onlineStreetRaceWinPercentage",
+     "profilePaths": [
+      "MiscStats/OnlineStreetRacesWon",
+      "MiscStats/OnlineStreetRacesEntered"
+     ],
+     "ratio": {
+      "a": "miscStats[0].onlineStreetRacesWon",
+      "b": "miscStats[0].onlineStreetRacesEntered",
+      "kind": "percent"
+     }
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CoopBucketListEventsCompleted",
+     "index": "0x2c",
+     "key": "coopBucketListEventsCompleted",
+     "path": "miscStats[0].onlineCoopBucketlistEventsCompleted",
+     "profilePaths": [
+      "MiscStats/OnlineCoopBucketlistEventsCompleted"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_FriendsBeatenInOnlineRaces",
+     "index": "0x2d",
+     "key": "friendsBeatenInOnlineRaces",
+     "path": "miscStats[0].onlineFriendsBeaten",
+     "profilePaths": [
+      "MiscStats/OnlineFriendsBeaten"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_NumberOfCleanOvertakes",
+     "index": "0x2e",
+     "key": "numberOfCleanOvertakes",
+     "path": "compareStats[0].onlineNumCleanOvertakes",
+     "profilePaths": [
+      "CompareStats/OnlineNumCleanOvertakes"
+     ]
+    },
+    {
+     "format": "average",
+     "ids": "IDS_Stat_OnlineAverageNumberOfCollisionsInARace",
+     "index": "0x2f",
+     "key": "onlineAverageNumberOfCollisionsInARace",
+     "profilePaths": [
+      "MiscStats/OnlineNumCollisionsInRaces",
+      "MiscStats/OnlineRacesEntered"
+     ],
+     "ratio": {
+      "a": "miscStats[0].onlineNumCollisionsInRaces",
+      "b": "miscStats[0].onlineRacesEntered",
+      "kind": "quotient"
+     }
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_XPWonFromCleanStarts",
+     "index": "0x30",
+     "key": "xpWonFromCleanStarts",
+     "path": "miscStats[0].onlineXPWonFromCleanStarts",
+     "profilePaths": [
+      "MiscStats/OnlineXPWonFromCleanStarts"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_XPWonFromCleanStreaks",
+     "index": "0x31",
+     "key": "xpWonFromCleanStreaks",
+     "path": "miscStats[0].onlineXPWonFromCleanStreak",
+     "profilePaths": [
+      "MiscStats/OnlineXPWonFromCleanStreak"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_HighestXPWonInAnEvent",
+     "index": "0x32",
+     "key": "highestXPWonInAnEvent",
+     "path": "compareStats[0].onlineHighestXPWonInAnEvent",
+     "profilePaths": [
+      "CompareStats/OnlineHighestXPWonInAnEvent"
+     ]
+    },
+    {
+     "format": "average",
+     "ids": "IDS_Stat_AvgXPPerOnlineEvent",
+     "index": "0x33",
+     "key": "avgXPPerOnlineEvent",
+     "profilePaths": [
+      "CompareStats/OnlineXP",
+      "MiscStats/OnlineRacesEntered"
+     ],
+     "ratio": {
+      "a": "compareStats[0].onlineXP",
+      "b": "miscStats[0].onlineRacesEntered",
+      "kind": "quotient"
+     }
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_LongestRoadTrip",
+     "index": "0x34",
+     "key": "longestRoadTrip",
+     "path": "compareStats[0].onlineLongestRoadTrip",
+     "profilePaths": [
+      "CompareStats/OnlineLongestRoadTrip"
+     ]
+    },
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_OnlineRaceCompletion",
+     "index": "0x35",
+     "key": "onlineRaceCompletion",
+     "profilePaths": [
+      "MiscStats/OnlineRacesEntered",
+      "MiscStats/OnlineRacesQuit"
+     ],
+     "ratio": {
+      "a": "miscStats[0].onlineRacesEntered",
+      "b": "miscStats[0].onlineRacesQuit",
+      "kind": "completion"
+     }
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_InfectedGamesEntered",
+     "index": "0x36",
+     "key": "infectedGamesEntered",
+     "path": "miscStats[0].onlineInfectedGamesEntered",
+     "profilePaths": [
+      "MiscStats/OnlineInfectedGamesEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_InfectedGamesWon",
+     "index": "0x37",
+     "key": "infectedGamesWon",
+     "path": "compareStats[0].onlineInfectedGamesWon",
+     "profilePaths": [
+      "CompareStats/OnlineInfectedGamesWon"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TimesInfected",
+     "index": "0x38",
+     "key": "timesInfected",
+     "path": "compareStats[0].onlineTimesInfected",
+     "profilePaths": [
+      "CompareStats/OnlineTimesInfected"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TimesYouInfectedOthers",
+     "index": "0x39",
+     "key": "timesYouInfectedOthers",
+     "path": "compareStats[0].onlineTimesYouInfectedOthers",
+     "profilePaths": [
+      "CompareStats/OnlineTimesYouInfectedOthers"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_KingGamesEntered",
+     "index": "0x3a",
+     "key": "kingGamesEntered",
+     "path": "miscStats[0].onlineKingGamesEntered",
+     "profilePaths": [
+      "MiscStats/OnlineKingGamesEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_KingGamesWon",
+     "index": "0x3b",
+     "key": "kingGamesWon",
+     "path": "compareStats[0].onlineKingGamesWon",
+     "profilePaths": [
+      "CompareStats/OnlineKingGamesWon"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeSpentAsKing",
+     "index": "0x3c",
+     "key": "timeSpentAsKing",
+     "path": "compareStats[0].onlineTimeSpentAsKing",
+     "profilePaths": [
+      "CompareStats/OnlineTimeSpentAsKing"
+     ]
+    }
+   ],
+   "tab": "online"
+  },
+  {
+   "rows": [
+    {
+     "format": "gforce",
+     "ids": "IDS_MaxLatGs",
+     "index": "0x3d",
+     "key": "maxLatGs",
+     "path": "drivatarStats[0].maxLateralGs",
+     "profilePaths": [
+      "Main/MaxLateralGs"
+     ]
+    },
+    {
+     "format": "gforce",
+     "ids": "IDS_AvgLatGs",
+     "index": "0x3e",
+     "key": "avgLatGs",
+     "path": "drivatarStats[0].avgLateralGs",
+     "profilePaths": [
+      "Main/AvgLateralGs"
+     ]
+    },
+    {
+     "format": "gforce",
+     "ids": "IDS_MaxAccGs",
+     "index": "0x3f",
+     "key": "maxAccGs",
+     "path": "drivatarStats[0].maxAccelerationGs",
+     "profilePaths": [
+      "Main/MaxAccelerationGs"
+     ]
+    },
+    {
+     "format": "gforce",
+     "ids": "IDS_AvgAccGs",
+     "index": "0x40",
+     "key": "avgAccGs",
+     "path": "drivatarStats[0].avgAccelerationGs",
+     "profilePaths": [
+      "Main/AvgAccelerationGs"
+     ]
+    },
+    {
+     "format": "gforce",
+     "ids": "IDS_MaxBrakingGs",
+     "index": "0x41",
+     "key": "maxBrakingGs",
+     "path": "drivatarStats[0].maxBrakingGs",
+     "profilePaths": [
+      "Main/MaxBrakingGs"
+     ]
+    },
+    {
+     "format": "gforce",
+     "ids": "IDS_AvgBrakingGs",
+     "index": "0x42",
+     "key": "avgBrakingGs",
+     "path": "drivatarStats[0].avgBrakingGs",
+     "profilePaths": [
+      "Main/AvgBrakingGs"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_MaxLFTireLoad",
+     "index": "0x43",
+     "key": "maxLFTireLoad",
+     "path": "drivatarStats[0].maxLeftFrontTireLoad",
+     "profilePaths": [
+      "Main/MaxLeftFrontTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_AvgLFTireLoad",
+     "index": "0x44",
+     "key": "avgLFTireLoad",
+     "path": "drivatarStats[0].avgLeftFrontTireLoad",
+     "profilePaths": [
+      "Main/AvgLeftFrontTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_MaxRFTireLoad",
+     "index": "0x45",
+     "key": "maxRFTireLoad",
+     "path": "drivatarStats[0].maxRightFrontTireLoad",
+     "profilePaths": [
+      "Main/MaxRightFrontTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_AvgRFTireLoad",
+     "index": "0x46",
+     "key": "avgRFTireLoad",
+     "path": "drivatarStats[0].avgRightFrontTireLoad",
+     "profilePaths": [
+      "Main/AvgRightFrontTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_MaxLRTireLoad",
+     "index": "0x47",
+     "key": "maxLRTireLoad",
+     "path": "drivatarStats[0].maxLeftRearTireLoad",
+     "profilePaths": [
+      "Main/MaxLeftRearTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_AvgLRTireLoad",
+     "index": "0x48",
+     "key": "avgLRTireLoad",
+     "path": "drivatarStats[0].avgLeftRearTireLoad",
+     "profilePaths": [
+      "Main/AvgLeftRearTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_MaxRRTireLoad",
+     "index": "0x49",
+     "key": "maxRRTireLoad",
+     "path": "drivatarStats[0].maxRightRearTireLoad",
+     "profilePaths": [
+      "Main/MaxRightRearTireLoad"
+     ]
+    },
+    {
+     "format": "load",
+     "ids": "IDS_AvgRRTireLoad",
+     "index": "0x4a",
+     "key": "avgRRTireLoad",
+     "path": "drivatarStats[0].avgRightRearTireLoad",
+     "profilePaths": [
+      "Main/AvgRightRearTireLoad"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_MaxLFTireTemp",
+     "index": "0x4b",
+     "key": "maxLFTireTemp",
+     "path": "drivatarStats[0].maxLeftFrontTireTemp",
+     "profilePaths": [
+      "Main/MaxLeftFrontTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_AvgLFTireTemp",
+     "index": "0x4c",
+     "key": "avgLFTireTemp",
+     "path": "drivatarStats[0].avgLeftFrontTireTemp",
+     "profilePaths": [
+      "Main/AvgLeftFrontTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_MaxRFTireTemp",
+     "index": "0x4d",
+     "key": "maxRFTireTemp",
+     "path": "drivatarStats[0].maxRightFrontTireTemp",
+     "profilePaths": [
+      "Main/MaxRightFrontTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_AvgRFTireTemp",
+     "index": "0x4e",
+     "key": "avgRFTireTemp",
+     "path": "drivatarStats[0].avgRightFrontTireTemp",
+     "profilePaths": [
+      "Main/AvgRightFrontTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_MaxLRTireTemp",
+     "index": "0x4f",
+     "key": "maxLRTireTemp",
+     "path": "drivatarStats[0].maxLeftRearTireTemp",
+     "profilePaths": [
+      "Main/MaxLeftRearTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_AvgLRTireTemp",
+     "index": "0x50",
+     "key": "avgLRTireTemp",
+     "path": "drivatarStats[0].avgLeftRearTireTemp",
+     "profilePaths": [
+      "Main/AvgLeftRearTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_MaxRRTireTemp",
+     "index": "0x51",
+     "key": "maxRRTireTemp",
+     "path": "drivatarStats[0].maxRightRearTireTemp",
+     "profilePaths": [
+      "Main/MaxRightRearTireTemp"
+     ]
+    },
+    {
+     "format": "temperature",
+     "ids": "IDS_AvgRRTireTemp",
+     "index": "0x52",
+     "key": "avgRRTireTemp",
+     "path": "drivatarStats[0].avgRightRearTireTemp",
+     "profilePaths": [
+      "Main/AvgRightRearTireTemp"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_MaxLFSusStroke",
+     "index": "0x53",
+     "key": "maxLFSusStroke",
+     "path": "drivatarStats[0].maxLeftFrontSuspensionStroke",
+     "profilePaths": [
+      "Main/MaxLeftFrontSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_AvgLFSusStroke",
+     "index": "0x54",
+     "key": "avgLFSusStroke",
+     "path": "drivatarStats[0].avgLeftFrontSuspensionStroke",
+     "profilePaths": [
+      "Main/AvgLeftFrontSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_MaxRFSusStroke",
+     "index": "0x55",
+     "key": "maxRFSusStroke",
+     "path": "drivatarStats[0].maxRightFrontSuspensionStroke",
+     "profilePaths": [
+      "Main/MaxRightFrontSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_AvgRFSusStroke",
+     "index": "0x56",
+     "key": "avgRFSusStroke",
+     "path": "drivatarStats[0].avgRightFrontSuspensionStroke",
+     "profilePaths": [
+      "Main/AvgRightFrontSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_MaxLRSusStroke",
+     "index": "0x57",
+     "key": "maxLRSusStroke",
+     "path": "drivatarStats[0].maxLeftRearSuspensionStroke",
+     "profilePaths": [
+      "Main/MaxLeftRearSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_AvgLRSusStroke",
+     "index": "0x58",
+     "key": "avgLRSusStroke",
+     "path": "drivatarStats[0].avgLeftRearSuspensionStroke",
+     "profilePaths": [
+      "Main/AvgLeftRearSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_MaxRRSusStroke",
+     "index": "0x59",
+     "key": "maxRRSusStroke",
+     "path": "drivatarStats[0].maxRightRearSuspensionStroke",
+     "profilePaths": [
+      "Main/MaxRightRearSuspensionStroke"
+     ]
+    },
+    {
+     "format": "stroke",
+     "ids": "IDS_AvgRRSusStroke",
+     "index": "0x5a",
+     "key": "avgRRSusStroke",
+     "path": "drivatarStats[0].avgRightRearSuspensionStroke",
+     "profilePaths": [
+      "Main/AvgRightRearSuspensionStroke"
+     ]
+    }
+   ],
+   "tab": "drivatar"
+  },
+  {
+   "rows": [
+    {
+     "format": "of",
+     "ids": "IDS_Stat_BarnFindsDiscovered",
+     "index": "0x5b",
+     "key": "barnFindsDiscovered",
+     "path": "compareStats[0].barnFinds",
+     "profilePaths": [
+      "CompareStats/BarnFinds"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_SmallValueBoardsSmashed",
+     "index": "0x5c",
+     "key": "smallValueBoardsSmashed",
+     "path": "compareStats[0].smallValueBoardsSmashed",
+     "profilePaths": [
+      "CompareStats/SmallValueBoardsSmashed"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_MediumValueBoardsSmashed",
+     "index": "0x5d",
+     "key": "mediumValueBoardsSmashed",
+     "path": "compareStats[0].mediumValueBoardsSmashed",
+     "profilePaths": [
+      "CompareStats/MediumValueBoardsSmashed"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_LargeValueBoardsSmashed",
+     "index": "0x5e",
+     "key": "largeValueBoardsSmashed",
+     "path": "compareStats[0].highValueBoardsSmashed",
+     "profilePaths": [
+      "CompareStats/HighValueBoardsSmashed"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_FastTravelBoardsSmashed",
+     "index": "0x60",
+     "key": "fastTravelBoardsSmashed",
+     "path": "compareStats[0].fastTravelBoardsSmashed",
+     "profilePaths": [
+      "CompareStats/FastTravelBoardsSmashed"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_RoadsDiscovered",
+     "index": "0x61",
+     "key": "roadsDiscovered",
+     "path": "compareStats[0].roadsDiscovered",
+     "profilePaths": [
+      "CompareStats/RoadsDiscovered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_SpeedTrapsTriggered",
+     "index": "0x62",
+     "key": "speedTrapsTriggered",
+     "path": "compareStats[0].speedTrapsTriggered",
+     "profilePaths": [
+      "CompareStats/SpeedTrapsTriggered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_SpeedZonesTriggered",
+     "index": "0x63",
+     "key": "speedZonesTriggered",
+     "path": "compareStats[0].speedZonesTriggered",
+     "profilePaths": [
+      "CompareStats/SpeedZonesTriggered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_BucketListEventsCompleted",
+     "index": "0x64",
+     "key": "bucketListEventsCompleted",
+     "path": "compareStats[0].bucketlistEventsCompleted",
+     "profilePaths": [
+      "CompareStats/BucketlistEventsCompleted"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_CarMeetsDiscovered",
+     "index": "0x65",
+     "key": "carMeetsDiscovered",
+     "path": "compareStats[0].carMeetsDiscovered",
+     "profilePaths": [
+      "CompareStats/CarMeetsDiscovered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_DestinationsVisited",
+     "index": "0x66",
+     "key": "destinationsVisited",
+     "path": "compareStats[0].destinationsVisited",
+     "profilePaths": [
+      "CompareStats/DestinationsVisited"
+     ]
+    }
+   ],
+   "tab": "discovery"
+  },
+  {
+   "rows": [
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_ProgressToHorizonFinal",
+     "index": "0x74",
+     "key": "progressToHorizonFinal",
+     "path": "compareStats[0].horizonFinalProgress",
+     "profilePaths": [
+      "CompareStats/HorizonFinalProgress"
+     ]
+    },
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_ProgressToHorizonFinal2",
+     "index": "0x75",
+     "key": "progressToHorizonFinal2",
+     "path": "compareStats[0].horizonFinalProgress2",
+     "profilePaths": [
+      "CompareStats/HorizonFinalProgress2"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_ShowcasesEntered",
+     "index": "0x67",
+     "key": "showcasesEntered",
+     "path": "compareStats[0].showcasesEntered",
+     "profilePaths": [
+      "CompareStats/ShowcasesEntered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_ShowcasesWon",
+     "index": "0x68",
+     "key": "showcasesWon",
+     "path": "compareStats[0].showcasesWon",
+     "profilePaths": [
+      "CompareStats/ShowcasesWon"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeInCarChampionshipEvents",
+     "index": "0x69",
+     "key": "timeInCarChampionshipEvents",
+     "path": "miscStats[0].timeInCarChampionshipEvents",
+     "profilePaths": [
+      "MiscStats/TimeInCarChampionshipEvents"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeInShowcases",
+     "index": "0x6a",
+     "key": "timeInShowcases",
+     "path": "miscStats[0].timeInShowcases",
+     "profilePaths": [
+      "MiscStats/TimeInShowcases"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_HighestXPWonInAnEvent",
+     "index": "0x6b",
+     "key": "highestXPWonInAnEvent",
+     "path": "compareStats[0].highestXPWinInAnEvent",
+     "profilePaths": [
+      "CompareStats/HighestXPWinInAnEvent"
+     ]
+    },
+    {
+     "format": "average",
+     "ids": "IDS_Stat_AvgXPPerEvent",
+     "index": "0x6c",
+     "key": "avgXPPerEvent",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "MiscStats/NumRacesSinglePlayer",
+      "MiscStats/XPSinglePlayerRaces"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_RoadTripEventsCompleted",
+     "index": "0x6d",
+     "key": "roadTripEventsCompleted",
+     "path": "compareStats[0].roadTripEventsCompleted",
+     "profilePaths": [
+      "CompareStats/RoadTripEventsCompleted"
+     ]
+    },
+    {
+     "format": "distance",
+     "ids": "IDS_Stat_TotalDistanceDrivenInRoadTrips",
+     "index": "0x6e",
+     "key": "totalDistanceDrivenInRoadTrips",
+     "path": "miscStats[0].roadTripDistanceDriven",
+     "profilePaths": [
+      "MiscStats/RoadTripDistanceDriven"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipEventsRaced",
+     "index": "0x6f",
+     "key": "carChampionshipEventsRaced",
+     "path": "miscStats[0].carChampionshipEventsRaced",
+     "profilePaths": [
+      "MiscStats/CarChampionshipEventsRaced"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipEventsPodiumFinishes",
+     "index": "0x70",
+     "key": "carChampionshipEventsPodiumFinishes",
+     "path": "miscStats[0].carChampionshipEventPodiums",
+     "profilePaths": [
+      "MiscStats/CarChampionshipEventPodiums"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipEventsWon",
+     "index": "0x71",
+     "key": "carChampionshipEventsWon",
+     "path": "compareStats[0].carChampionshipEventsWon",
+     "profilePaths": [
+      "CompareStats/CarChampionshipEventsWon"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipsCompleted",
+     "index": "0x72",
+     "key": "carChampionshipsCompleted",
+     "path": "miscStats[0].carChampionshipsCompleted",
+     "profilePaths": [
+      "MiscStats/CarChampionshipsCompleted"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipsWon",
+     "index": "0x73",
+     "key": "carChampionshipsWon",
+     "path": "compareStats[0].carChampionshipsWon",
+     "profilePaths": [
+      "CompareStats/CarChampionshipsWon"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_XPEarnedInRoadTrips",
+     "index": "0x76",
+     "key": "xpEarnedInRoadTrips",
+     "path": "compareStats[0].xpEarnedInRoadTrips",
+     "profilePaths": [
+      "CompareStats/XPEarnedInRoadTrips"
+     ]
+    },
+    {
+     "format": "car",
+     "ids": "IDS_Stat_FavoriteRoadTripCar",
+     "index": "0x77",
+     "key": "favoriteRoadTripCar",
+     "path": "miscStats[0].favouriteRoadTripCar",
+     "profilePaths": [
+      "MiscStats/FavouriteRoadTripCar"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_RoadTripAwardPartiesAttended",
+     "index": "0x78",
+     "key": "roadTripAwardPartiesAttended",
+     "path": "compareStats[0].roadTripPartiesAttended",
+     "profilePaths": [
+      "CompareStats/RoadTripPartiesAttended"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Stat_TimeSpentInRoadTrips",
+     "index": "0x79",
+     "key": "timeSpentInRoadTrips",
+     "path": "miscStats[0].timeInRoadTrips",
+     "profilePaths": [
+      "MiscStats/TimeInRoadTrips"
+     ]
+    }
+   ],
+   "tab": "single-player"
+  },
+  {
+   "rows": [
+    {
+     "format": "int",
+     "ids": "IDS_Stat_HighestSkillChainScore",
+     "index": "0x7c",
+     "key": "highestSkillChainScore",
+     "path": "playerRaceHistory[0].highestSkillScore",
+     "profilePaths": [
+      "Main/HighestSkillScore"
+     ]
+    },
+    {
+     "format": "car",
+     "ids": "IDS_Stat_HighestSkillChainCar",
+     "index": "0x7d",
+     "key": "highestSkillChainCar",
+     "path": "playerRaceHistory[0].highestSkillCar",
+     "profilePaths": [
+      "Main/HighestSkillCar"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TotalSkillTokensEarned",
+     "index": "0x7e",
+     "key": "totalSkillTokensEarned",
+     "path": "playerRaceHistory[0].numSkillTokens",
+     "profilePaths": [
+      "Main/NumSkillTokens"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_PerksUnlocked",
+     "index": "0x7b",
+     "key": "perksUnlocked",
+     "path": "compareStats[0].perksUnlocked",
+     "profilePaths": [
+      "CompareStats/PerksUnlocked"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateDriftSkills",
+     "index": "0x7f",
+     "key": "ultimateDriftSkills",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Main/NumUltimateDrifts"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateSpeedSkills",
+     "index": "0x80",
+     "key": "ultimateSpeedSkills",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Main/NumUltimateSpeeds"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateDraftSkills",
+     "index": "0x81",
+     "key": "ultimateDraftSkills",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Main/NumUltimateDrafts"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimatePass_Skills",
+     "index": "0x82",
+     "key": "ultimatePassSkills",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Main/NumUltimatePasses"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateBurnoutSkills",
+     "index": "0x83",
+     "key": "ultimateBurnoutSkills",
+     "path": "playerRaceHistory[0].numUltimateBurnouts",
+     "profilePaths": [
+      "Main/NumUltimateBurnouts"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateAirSkills",
+     "index": "0x84",
+     "key": "ultimateAirSkills",
+     "path": "playerRaceHistory[0].numUltimateAirs",
+     "profilePaths": [
+      "Main/NumUltimateAirs"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateTwoWheelsSkills",
+     "index": "0x85",
+     "key": "ultimateTwoWheelsSkills",
+     "path": "playerRaceHistory[0].numUltimateTwoWheels",
+     "profilePaths": [
+      "Main/NumUltimateTwoWheels"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateEDriftSkills",
+     "index": "0x86",
+     "key": "ultimateEDriftSkills",
+     "path": "playerRaceHistory[0].numUltimateEDrifts",
+     "profilePaths": [
+      "Main/NumUltimateEDrifts"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateNearMissSkills",
+     "index": "0x87",
+     "key": "ultimateNearMissSkills",
+     "path": "playerRaceHistory[0].numUltimateNearMisses",
+     "profilePaths": [
+      "Main/NumUltimateNearMisses"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateWreckageSkills",
+     "index": "0x88",
+     "key": "ultimateWreckageSkills",
+     "path": "playerRaceHistory[0].numUltimateWreckages",
+     "profilePaths": [
+      "Main/NumUltimateWreckages"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateOneEightySkills",
+     "index": "0x89",
+     "key": "ultimateOneEightySkills",
+     "path": "playerRaceHistory[0].numUltimateOneEighties",
+     "profilePaths": [
+      "Main/NumUltimateOneEighties"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_UltimateJTurnSkills",
+     "index": "0x8a",
+     "key": "ultimateJTurnSkills",
+     "path": "playerRaceHistory[0].numUltimateJTurns",
+     "profilePaths": [
+      "Main/NumUltimateJTurns"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_TotalUltimateSkills",
+     "index": "0x8b",
+     "key": "totalUltimateSkills",
+     "omit": true,
+     "omitReason": "computed"
+    }
+   ],
+   "tab": "skills"
+  },
+  {
+   "rows": [
+    {
+     "format": "speed",
+     "ids": "IDS_Stat_TopSpeed",
+     "index": "0x8c",
+     "key": "topSpeed",
+     "path": "playerRaceHistory[0].topSpeed",
+     "profilePaths": [
+      "Main/TopSpeed"
+     ]
+    },
+    {
+     "format": "speed",
+     "ids": "IDS_Display_Avag_Speed",
+     "index": "0x8d",
+     "key": "avagSpeed",
+     "profilePaths": [
+      "Main/DistanceDriven",
+      "Main/TimeDriven"
+     ],
+     "ratio": {
+      "a": "playerRaceHistory[0].distanceDriven",
+      "b": "playerRaceHistory[0].timeDriven",
+      "kind": "quotient"
+     }
+    },
+    {
+     "format": "distance",
+     "ids": "IDS_Display_Distance_Driven",
+     "index": "0x8e",
+     "key": "distanceDriven",
+     "path": "playerRaceHistory[0].distanceDriven",
+     "profilePaths": [
+      "Main/DistanceDriven"
+     ]
+    },
+    {
+     "format": "distance",
+     "ids": "IDS_Stat_BiggestAir",
+     "index": "0x8f",
+     "key": "biggestAir",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "MiscStats/BiggestAir"
+     ]
+    },
+    {
+     "format": "distance",
+     "ids": "IDS_Stat_LongestDrift",
+     "index": "0x90",
+     "key": "longestDrift",
+     "path": "playerRaceHistory[0].longestDrift",
+     "profilePaths": [
+      "Main/LongestDrift"
+     ]
+    },
+    {
+     "format": "distance",
+     "ids": "IDS_Stat_LongestJump",
+     "index": "0x91",
+     "key": "longestJump",
+     "path": "playerRaceHistory[0].longestJump",
+     "profilePaths": [
+      "Main/LongestJump"
+     ]
+    }
+   ],
+   "tab": "records"
+  },
+  {
+   "rows": [
+    {
+     "format": "percent",
+     "ids": "IDS_Stat_ProgressToIslandFinal",
+     "index": "0x95",
+     "key": "progressToIslandFinal",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/FinalProgress"
+     ]
+    },
+    {
+     "format": "duration",
+     "ids": "IDS_Display_Time_Driven",
+     "index": "0x9b",
+     "key": "timeDriven",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/TimeDriven"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipEventsRaced",
+     "index": "0x96",
+     "key": "carChampionshipEventsRaced",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/CarChampionshipEventsRaced"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipEventsPodiumFinishes",
+     "index": "0x97",
+     "key": "carChampionshipEventsPodiumFinishes",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/CarChampionshipEventPodiums"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipEventsWon",
+     "index": "0x98",
+     "key": "carChampionshipEventsWon",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/CarChampionshipEventsWon"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipsCompleted",
+     "index": "0x99",
+     "key": "carChampionshipsCompleted",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/CarChampionshipsCompleted"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CarChampionshipsWon",
+     "index": "0x9a",
+     "key": "carChampionshipsWon",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/CarChampionshipsWon"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_UpgradesBoardsSmashed",
+     "index": "0x9c",
+     "key": "upgradesBoardsSmashed",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "MiscStats/UpgradesBoardsSmashed"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_RoadsDiscovered",
+     "index": "0x9d",
+     "key": "roadsDiscovered",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/RoadsDiscovered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_SpeedTrapsTriggered",
+     "index": "0x9e",
+     "key": "speedTrapsTriggered",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/SpeedTrapsTriggered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_SpeedZonesTriggered",
+     "index": "0x9f",
+     "key": "speedZonesTriggered",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/SpeedZonesTriggered"
+     ]
+    },
+    {
+     "format": "of",
+     "ids": "IDS_Stat_BucketListEventsCompleted",
+     "index": "0xa0",
+     "key": "bucketListEventsCompleted",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/BucketlistEventsCompleted"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_CoopBucketListEventsCompleted",
+     "index": "0xa1",
+     "key": "coopBucketListEventsCompleted",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/OnlineCoopBucketlistEventsCompleted"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_IronManEventsEntered",
+     "index": "0xa2",
+     "key": "ironManEventsEntered",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/IronManEventsEntered"
+     ]
+    },
+    {
+     "format": "int",
+     "ids": "IDS_Stat_IronManEventsWon",
+     "index": "0xa3",
+     "key": "ironManEventsWon",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/IronManEventsWon"
+     ]
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Display_Total_Winnings",
+     "index": "0xa4",
+     "key": "totalWinnings",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/TotalWinnings"
+     ]
+    },
+    {
+     "format": "credits",
+     "ids": "IDS_Stat_OnlineWinnings",
+     "index": "0xa5",
+     "key": "onlineWinnings",
+     "omit": true,
+     "omitReason": "save-only",
+     "profilePaths": [
+      "Island/OnlineWinnings"
+     ]
+    }
+   ],
+   "tab": "storm-island"
+  }
+ ]
+}

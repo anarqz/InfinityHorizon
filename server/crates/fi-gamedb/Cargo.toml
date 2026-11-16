@@ -1,0 +1,34 @@
+# Forza Horizon 2's catalog for the server (SER-M3 step 6, OD-48): cars, classes, car buckets and
+# tracks extracted from the game's own database by tools/gamedata/extract_fh2.py, the game's economy
+# numbers for the Hardcore guardrails (level curve, tombola, per-race limits; OD-62), and the pure
+# RPC gates over them (race times, top speed, XP, the profile sync's guardrails, garage). No game
+# data is compiled in: every table is a file of the game data directory (FI_GAME_DATA_DIR, crate
+# fi-gamedata), read once. No clock.
+[package]
+name = "fi-gamedb"
+version = "0.0.0"
+description = "ForzaInfinity FH2 catalog (cars, classes, buckets, tracks) and the game plane's pure integrity gates."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The parts shop's list prices (game data fh2/parts.json, 0.5 MB) as `parts::PartPrices::fh2`: the
+# save audit job (fi-cli) and the game plane's purchasedParts gate.
+parts = []
+
+[dependencies]
+# The game data directory (T-1115): every table here is one of its files.
+fi-gamedata = { path = "../fi-gamedata" }
+# The Hardcore guardrails' assessment (OD-62): the profile sync's rates, ceilings and score.
+fi-guard = { path = "../fi-guard" }
+# The save audit's input (OD-67, ADR 0021): the facts of a save's PlayerDatabase. Std only.
+fi-playerdb = { path = "../fi-playerdb" }
+# Exact pins (the porthub saveExact rule); versions match the other workspace crates.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

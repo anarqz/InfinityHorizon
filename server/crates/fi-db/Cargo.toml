@@ -1,0 +1,44 @@
+# The only crate that talks to Postgres (ADR 0004): connection pool, embedded migrations, login
+# roles, and the Postgres implementations of the domain stores (fi_saves::SaveStore today).
+[package]
+name = "fi-db"
+version = "0.0.0"
+description = "ForzaInfinity Postgres adapter: pool, sqlx migrations, roles, and the Postgres save store."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# SCRAM-SHA-256 verifiers for login passwords (migrate.rs): the same versions sqlx-postgres uses.
+base64 = "=0.22.1"
+getrandom = "=0.4.3"
+hmac = "=0.13.0"
+sha2 = "=0.11.1"
+fi-domain = { path = "../fi-domain" }
+fi-crash = { path = "../fi-crash" }
+fi-content = { path = "../fi-content" }
+fi-protocol = { path = "../fi-protocol" }
+# The XP-per-report bound a progression fact is checked against (CR-S55).
+fi-gamedb = { path = "../fi-gamedb" }
+# The Hardcore guardrails' assessments it records (integrity_assessment, OD-62).
+fi-guard = { path = "../fi-guard" }
+fi-saves = { path = "../fi-saves" }
+serde_json = "=1.0.154"
+# Runtime queries only (no compile-time `query!`): builds need no database (ADR 0004 §3).
+# No TLS feature: Cloud Run reaches Cloud SQL through the /cloudsql unix socket of the connector.
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "time", "json", "migrate", "macros"] }
+thiserror = "=2.0.21"
+time = "=0.3.55"
+# The lock-timeout retry of `migrate::apply`.
+tokio = { version = "=1.53.3", features = ["time"] }
+tracing = "=0.1.44"
+uuid = { version = "=1.28.0", features = ["v7"] }
+
+[dev-dependencies]
+fi-saves = { path = "../fi-saves", features = ["testkit"] }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

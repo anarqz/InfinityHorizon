@@ -1,0 +1,12 @@
+{
+ "levelCurve": [
+  {"increasePerLevel": 0, "steps": 14, "xpPerLevel": 15000},
+  {"increasePerLevel": 0, "steps": 135, "xpPerLevel": 20000},
+  {"increasePerLevel": 300, "steps": 850, "xpPerLevel": 20000}
+ ],
+ "maxBaseCreditsPerRace": 60000,
+ "maxExperiencePerRace": 60000,
+ "source": "PlayerXPLevels.xml (media/GameTunableSettings.zip), GameTunableSettings.ini RaceWinnings, gamedb TombolaPrizes.CreditAward; token schedule from the game's code",
+ "tokens": {"cap": 65, "first": 2000, "step": 100000},
+ "tombolaMaxCredits": 500000
+}

@@ -1,0 +1,11 @@
+# Context of docker/platform.Dockerfile (context: the server folder): the Cargo workspace only.
+# BuildKit reads <Dockerfile>.dockerignore before a root .dockerignore. No .env, keys, game data or
+# target directory reaches the build.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/**
+!services/**
+**/target
+**/.env
+**/.env.*

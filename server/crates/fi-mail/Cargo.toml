@@ -1,0 +1,34 @@
+# fi-mail: the transactional mail of a `local` sign-in instance (OD-122 follow-ups 2026-10-26: local
+# sign-in with e-mail confirmation and password reset "via credenciais SMTP configuradas no server";
+# Resend's SMTP, smtp.resend.com, user `resend`, the API key as the password; register CR-S53). A
+# `Mailer` trait with three backends: SMTP (lettre), a log backend for an instance without the key
+# yet (it logs that a mail was not delivered, never the address, link or token) and a recording
+# fake for tests. Plus the two bilingual (en, pt-BR) templates. Reads no environment variable:
+# fi-surfaces' configuration builds it.
+[package]
+name = "fi-mail"
+version = "0.0.0"
+description = "ForzaInfinity transactional mail: SMTP (Resend) over rustls, a log backend, a recording fake, en/pt-BR templates."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# SMTP client. Why lettre: the maintained Rust SMTP client (async on tokio, implicit TLS and
+# STARTTLS, AUTH PLAIN/LOGIN, RFC 5322 builder with UTF-8 subjects). Default features off: no
+# native-tls/OpenSSL (the slim image has no libssl) and no connection pool (a few mails an hour).
+# `tokio1-rustls-tls` = rustls + ring + webpki-roots (Mozilla's roots, built in: distroless has no
+# CA bundle); `builder` for the message; `smtp-transport` for the client.
+lettre = { version = "=0.11.23", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls"] }
+sha2 = "=0.11.1"
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.3", features = ["sync", "time"] }
+tracing = "=0.1.44"
+
+[dev-dependencies]
+tokio = { version = "=1.53.3", features = ["rt", "macros"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

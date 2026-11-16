@@ -1,0 +1,23 @@
+# Hardcore guardrails (OD-62, ADR 0020): the one pure assessment of a Hardcore profile's progress
+# between two accepted states, shared by the game plane's profile-sync gates (fi-gamedb) and the
+# save-commit gates (fi-saves). A leaf of its own: fi-saves builds into the launcher, so it may not
+# depend on fi-gamedb (whose embedded catalog is game-derived, OD-32), and fi-gamedb has no reason
+# to depend on the save core. No clock, no game data; the tuned limits are a data file
+# (`guard/limits.json` of FI_GAME_DATA_DIR, read once through fi-gamedata).
+[package]
+name = "fi-guard"
+version = "0.0.0"
+description = "ForzaInfinity Hardcore guardrails: progress rates, absurd-value ceilings and the 0-100 anomaly score with stable reason codes."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fi-gamedata = { path = "../fi-gamedata" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

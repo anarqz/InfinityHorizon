@@ -1,0 +1,43 @@
+# The Infinity Horizon server: one Cargo workspace for the server's services and libraries.
+# Services (deployables) live in services/, shared libraries in crates/.
+[workspace]
+resolver = "3"
+members = [
+    "crates/fi-announce",
+    "crates/fi-auth",
+    "crates/fi-content",
+    "crates/fi-crash",
+    "crates/fi-db",
+    "crates/fi-domain",
+    "crates/fi-gamedata",
+    "crates/fi-gamedb",
+    "crates/fi-guard",
+    "crates/fi-mail",
+    "crates/fi-netwatch",
+    "crates/fi-playerdb",
+    "crates/fi-protocol",
+    "crates/fi-relay",
+    "crates/fi-runtime",
+    "crates/fi-saves",
+    "crates/fi-storage",
+    "crates/fi-surfaces",
+    "crates/fi-xtsw",
+    "services/beholder",
+    "services/cli",
+    "services/core",
+    "services/crash",
+    "services/gate",
+    "services/matchmaking",
+    "services/platform",
+    "services/relay",
+    "services/saves",
+]
+
+[workspace.package]
+edition = "2024"
+# Minimum compiler, equal to the pin in rust-toolchain.toml.
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace.dependencies]

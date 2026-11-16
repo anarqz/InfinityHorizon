@@ -1,0 +1,55 @@
+Infinity Horizon server
+Copyright (C) 2026 Alexandre Moraes and the Infinity Horizon contributors
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU Affero General Public License as published by the Free Software Foundation, version 3 of the
+License (see LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+Affero General Public License for more details.
+
+If you run a modified version of this server for other people over a network, section 13 of the
+License requires you to offer them its complete corresponding source code.
+
+
+GAME DATA
+
+Forza Horizon 2 and Forza Motorsport 5 are not part of this program. No file of either game, or
+part of one, is distributed here. The server reads the files extracted from the operator's own
+game install (tools/gamedata/build.py) at run time. The tables in gamedata/ are our own facts,
+numbers and names (identifiers, limits, layouts and corrections we wrote or measured), not game
+files.
+
+
+THIRD-PARTY COMPONENTS
+
+- The free-roam session documents of crates/fi-surfaces/src/game/freeroam/ (and the matching
+  storage in crates/fi-db/src/freeroam.rs) are ported from fh2-mods' `fh2srv.py` by conner-mcvay
+  and contributors (https://github.com/conner-mcvay/fh2-mods), under the MIT License:
+
+    MIT License
+
+    Copyright (c) 2026 conner-mcvay and contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+- The Rust dependencies in Cargo.lock keep their own licences (MIT, Apache-2.0, BSD, ISC, Zlib,
+  Unicode, CDLA-Permissive-2.0 and similar permissive terms); their notices ship with their
+  sources.

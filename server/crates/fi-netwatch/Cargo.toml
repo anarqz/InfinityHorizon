@@ -1,0 +1,28 @@
+# fi-netwatch: the relay as the anti-cheat detector (MATCHMAKING_API.md §5d, OD-159/OD-160, register
+# CR-S80). A leaf without I/O: the NerdCore reader for the two game messages §5d reads (CarPredictionFull
+# and router-1 PlayerData's owner byte ↔ XUID), the per-second rings preallocated at start, the
+# violation, forgery and jump evaluation against the platform's WatchRules, and the relay ↔ platform
+# certificates and message signatures (both sides use this module, so the platform verifies exactly
+# what the relay signs). The clock is passed in. Server-owned (MacBook, 2026-10-31): fi-relay-vm
+# (services/relay) observes the datagrams fi-relay forwards and feeds them here; crates/fi-relay is
+# untouched. Positions live only in memory; nothing here logs or persists.
+[package]
+name = "fi-netwatch"
+version = "0.0.0"
+description = "ForzaInfinity relay anti-cheat detector: NerdCore car decoding, per-second rings, evaluation and relay/platform certificates."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "=0.22.1"
+# Same version as fi-auth (matchmaking's signer) and fi-relay (the grant verifier).
+ed25519-dalek = "=3.0.0"
+# The DTOs of §5d (a leaf: serde only).
+fi-protocol = { path = "../fi-protocol" }
+serde_json = "=1.0.154"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

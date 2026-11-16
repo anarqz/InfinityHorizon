@@ -1,0 +1,7 @@
+# Built from your own game install by tools/gamedata/build.py: never commit them.
+fh2/xtsw-schema.json
+fh2/catalog.json
+fh2/parts.json
+fh2/packs.json
+fm5/xtsw-schema.json
+manifest.json

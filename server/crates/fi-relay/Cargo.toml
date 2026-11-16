@@ -1,0 +1,38 @@
+# The UDP core of the relay (ADR 0017 §2, MATCHMAKING_API.md §5): STUN-shaped binding answers,
+# grant-paired rendezvous and the capped fallback forwarder, verifying relay grants offline with
+# public keys. Shared by the relay VM (services/relay, fi-relay-vm) and, later, the player-hosted
+# relay of `infinity.exe relay`, so it builds for x86_64-pc-windows-gnu and depends on no server
+# crate (fi-auth's signer is tested against this verifier, not the other way round). Written from
+# our own knowledge of NAT traversal (OD-23): nothing comes from Beta's dedicated/.
+[package]
+name = "fi-relay"
+version = "0.0.0"
+description = "ForzaInfinity relay UDP core: binding answers, grant-paired rendezvous, capped fallback forwarding."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "=0.22.1"
+# Same version as fi-auth (the signer) and fi-launcher-core.
+ed25519-dalek = "=3.0.0"
+# The per-process key of the return-routability cookies (never configured, never stored).
+getrandom = "=0.4.3"
+# The grant claims' wire type (a leaf: serde only).
+fi-protocol = { path = "../fi-protocol" }
+serde_json = "=1.0.154"
+# Cookies: SHA-256 of the process key, the minute and the sender's endpoint.
+sha2 = "=0.11.1"
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.3", features = ["net", "rt", "macros", "time", "sync"] }
+tracing = "=0.1.44"
+
+[dev-dependencies]
+# tests/signer.rs: grants signed by the matchmaking service's signer verify here.
+fi-auth = { path = "../fi-auth" }
+tokio = { version = "=1.53.3", features = ["net", "rt-multi-thread", "macros", "time", "sync"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

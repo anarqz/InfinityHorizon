@@ -1,0 +1,40 @@
+# fi-core: the public, account, social, admin and MCP surface of platform v1 (ADR 0013,
+# CORE_API.md). Mounts fi-api's identity, web-portal and internal routers and adds /core/v1,
+# the web's cookie session with Turnstile, in-app rate limits, the edge lock and the MCP skeleton.
+[package]
+name = "fi-core"
+version = "0.0.0"
+description = "ForzaInfinity core: identity, /me, social hub, moderation, notices, status and the MCP skeleton (platform v1)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "query", "matched-path", "tracing"] }
+fi-surfaces = { path = "../../crates/fi-surfaces" }
+fi-auth = { path = "../../crates/fi-auth" }
+fi-db = { path = "../../crates/fi-db" }
+fi-domain = { path = "../../crates/fi-domain" }
+fi-protocol = { path = "../../crates/fi-protocol" }
+fi-runtime = { path = "../../crates/fi-runtime" }
+# Turnstile siteverify (https://challenges.cloudflare.com) and the readiness probes (https public
+# hosts): rustls with the platform verifier (the distroless image's CA certificates).
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tracing = "=0.1.44"
+uuid = { version = "=1.28.0", features = ["v7"] }
+
+[dev-dependencies]
+fi-crash-service = { path = "../crash" }
+# tests/deploy_env.rs starts every public service's configuration from Terraform's environment.
+fi-gate = { path = "../gate" }
+fi-matchmaking = { path = "../matchmaking" }
+fi-saves-service = { path = "../saves" }
+tower = { version = "=0.5.3", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"

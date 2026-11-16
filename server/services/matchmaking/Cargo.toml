@@ -1,0 +1,46 @@
+# fi-matchmaking: the platform v1 matchmaking control plane (ADR 0017 §1; MATCHMAKING_API.md):
+# the world directory, join grants with the lock, the free limit and its queue, host moderation,
+# punches and the public capacity, behind the game access ticket (verify-only), signing the relay
+# grants the relay VM verifies offline. Storage and decisions are fi_db::matchmaking.
+[package]
+name = "fi-matchmaking"
+version = "0.0.0"
+description = "ForzaInfinity matchmaking service: worlds, join grants, the free limit and queue, host moderation, punches, relay grants."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "query", "matched-path", "tracing"] }
+fi-surfaces = { path = "../../crates/fi-surfaces" }
+fi-auth = { path = "../../crates/fi-auth" }
+fi-db = { path = "../../crates/fi-db" }
+fi-domain = { path = "../../crates/fi-domain" }
+# The relay detector's certificates and signatures (MATCHMAKING_API.md §5d; the relay signs with it).
+fi-netwatch = { path = "../../crates/fi-netwatch" }
+# The per-instance session key of the relay routes (same pins as fi-auth).
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.4.3"
+sha2 = "=0.11.1"
+fi-protocol = { path = "../../crates/fi-protocol" }
+fi-runtime = { path = "../../crates/fi-runtime" }
+# OD-160: the beholder's relay list (the same pin as fi-surfaces and fi-announce).
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tracing = "=0.1.44"
+uuid = { version = "=1.28.0", features = ["v7"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["std", "fmt", "registry", "json"] }
+# The relay's own verifier checks the grants this service signs.
+fi-relay = { path = "../../crates/fi-relay" }
+# Synthetic bin/xtsw bodies for the free game plane's Forza RPC tests (tests/http.rs).
+fi-xtsw = { path = "../../crates/fi-xtsw" }
+sqlx ={ version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "time"] }
+tower = { version = "=0.5.3", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"

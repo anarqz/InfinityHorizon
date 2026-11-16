@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="{{language}}" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{{subject}}</title>
+<style>
+:root { color-scheme: light dark; supported-color-schemes: light dark; }
+body { margin:0; padding:0; width:100% !important; -webkit-text-size-adjust:100%; }
+table { border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }
+a { text-decoration:underline; }
+a[x-apple-data-detectors] { color:inherit !important; text-decoration:none !important; }
+@media screen and (max-width:600px) {
+  .outer { padding:20px 12px !important; }
+  .pad { padding-left:24px !important; padding-right:24px !important; }
+  .headline { font-size:32px !important; line-height:1.12 !important; }
+  .code { font-size:38px !important; letter-spacing:5px !important; }
+  .button { display:block !important; text-align:center !important; }
+}
+@media (prefers-color-scheme:dark) {
+  .canvas { background-color:#0a0b14 !important; }
+  .panel { background-color:#16192c !important; }
+  .ink { color:#f3f1ff !important; }
+  .muted { color:#b5b2ce !important; }
+  .rule { border-color:#323650 !important; }
+  .codebox { background-color:#242037 !important; border-color:#65425a !important; }
+  .code { color:#ffb878 !important; }
+  .actionlink { color:#ffad76 !important; }
+  .notice { background-color:#202337 !important; }
+}
+/* Outlook's explicit dark-mode attribute in clients that expose it. */
+[data-ogsc] .canvas { background-color:#0a0b14 !important; }
+[data-ogsc] .panel { background-color:#16192c !important; }
+[data-ogsc] .ink { color:#f3f1ff !important; }
+[data-ogsc] .muted { color:#b5b2ce !important; }
+[data-ogsc] .actionlink { color:#ffad76 !important; }
+</style>
+</head>
+<body class="canvas" style="margin:0;padding:0;background-color:#f2f1f7;font-family:Arial,Helvetica,sans-serif;color:#19182b;">
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{{preheader}}</div>
+<table role="presentation" width="100%" class="canvas" style="background-color:#f2f1f7;"><tr><td align="center" class="outer" style="padding:40px 16px;">
+<!--[if mso]><table role="presentation" width="600" align="center"><tr><td><![endif]-->
+<table role="presentation" width="100%" class="panel" style="max-width:600px;background-color:#ffffff;border-radius:18px;overflow:hidden;">
+<tr><td style="background-color:#101322;">
+<table role="presentation" width="100%"><tr><td width="34%" height="5" bgcolor="#ff2e88" style="height:5px;font-size:0;line-height:0;">&nbsp;</td><td width="33%" height="5" bgcolor="#ff6650" style="height:5px;font-size:0;line-height:0;">&nbsp;</td><td width="33%" height="5" bgcolor="#ffad3b" style="height:5px;font-size:0;line-height:0;">&nbsp;</td></tr></table>
+</td></tr>
+<tr><td class="pad" style="background-color:#101322;padding:30px 40px 28px;">
+<table role="presentation" width="100%"><tr><td style="color:#f3f1ff;font-family:Arial,Helvetica,sans-serif;font-size:21px;font-weight:900;letter-spacing:1px;line-height:1.3;">{{wordmark}}</td><td align="right" aria-hidden="true" style="color:#ff5aa0;font-family:Arial,Helvetica,sans-serif;font-size:34px;line-height:1;">&#8734;</td></tr></table>
+</td></tr>
+{{content}}
+<tr><td class="pad rule" style="padding:24px 40px;border-top:1px solid #e7e4ef;">
+<p class="muted" style="margin:0;color:#66617b;font-size:12px;line-height:1.7;">{{product}}<br>{{footer}}</p>
+</td></tr>
+</table>
+<!--[if mso]></td></tr></table><![endif]-->
+<p class="muted" style="max-width:520px;margin:20px 0 0;color:#66617b;font-size:11px;line-height:1.7;text-align:center;">{{security_footer}}</p>
+</td></tr></table>
+</body>
+</html>

@@ -1,0 +1,165 @@
+{
+ "generatedAt": "2026-11-02T02:58:30Z",
+ "task": "T-PD-S6",
+ "statsBoards": {
+  "4/7": {
+   "stat": "Horizon Promo: distinct car models photographed",
+   "submitted": "count (FUN_14093bfd0 -> FUN_140435f10 = collection count with wildcard make/class filters), snapshot",
+   "notRankOrPoints": true,
+   "max": 354,
+   "maxNote": "bounded by catalog car models (Data_Car 354 rows, traffic vehicles included). PhotoChallengeRanks.xml lists reward thresholds every 20 cars up to 420; ranks above the car count are unreachable, they are not a score.",
+   "confidence": "high for \"count\"; exact photographable subset not enumerated"
+  },
+  "4/12": {
+   "stat": "bucket list challenges completed",
+   "submitted": "the bucket list activity counter (FUN_1405ec5d0, *(activity+0x150)), snapshot",
+   "scope": "mainland and Storm Island bucket lists use the same template (templates_bucket_list.xml, LeaderboardType BucketList) and so feed the same board; online co-op bucket list has its own stats and no leaderboard",
+   "max": 63,
+   "maxNote": "55 (MaxAchievable/BucketListEvents) if the counter is per world, 55+8=63 if cumulative; not resolved statically -> gate at 63 to avoid refusing honest play",
+   "confidence": "medium"
+  },
+  "4/15": {
+   "stat": "Storm Island bonus boards",
+   "submitted": "same code as 4/9 (FUN_140513740): sum of three per-kind smashed counters of the board group, snapshot",
+   "max": null,
+   "maxNote": "the summed kinds are most likely the three XP/credit kinds (template order travel, upgrades, xp_a, xp_b, xp_c; loop over entries 0x50..0xb0). The island board placements are not in this install's world data, so their count is unknown; MaxAchievable/UpgradeBoards = 25 counts upgrade boards (MiscStats/UpgradesBoardsSmashed), which is not one of the summed kinds. No safe hard cap; observed max 13.",
+   "confidence": "low"
+  },
+  "4/9_revision": {
+   "stat": "mainland bonus boards (same code)",
+   "note": "by the same inference 4/9 sums the credit boards A+B+C = 50+35+15 = 100 (world gameplay ids DISCOUNT_BOARD_CREDITS_A/B/C), excluding 50 fast-travel boards; T-PD-S5 said 150. Observed max 95 fits both. Keep the gate at 150 until confirmed; 100 is the likely true max.",
+   "confidence": "medium"
+  }
+ },
+ "rivalsClassRule": {
+  "answer": "exact class only (that PI band), not lower classes",
+  "evidence": "FUN_140c16500 builds the car filter from the event restrictions: with a class set, lower = FUN_14104b750 (previous class raw max, 0 for D) and upper = class raw max; SQL \"((Garage.MaxUpgradeWizardPerfRating >= lower AND StockPerformanceRating < upper) OR (Garage.PerformanceIndex >= lower AND Garage.PerformanceIndex < upper))\" (<= for class 7). A min/max displayed PI restriction, when set, is converted to raw through the same table.",
+  "serverCheck": "class(carPerformanceIndex) == event class, using the raw bands below; the wizard branch lists cars that can be upgraded into the band, so the submitted PI is still in the band"
+ },
+ "pi": {
+  "encoding": "carPerformanceIndex and Data_Car.PerformanceIndex are the raw index 0..1 (clamped to [0,1] by the game)",
+  "class": "first class k with raw <= rawMax[k] (FUN_1410499b0)",
+  "display": "FUN_14104c8d0: k=class(raw); D: int(raw/0.4345*(501-100)+100) clamped to [100,500]; k>0: int((raw-rawMax[k-1])/(rawMax[k]-rawMax[k-1])*((dispMax[k]+1)-(dispMax[k-1]+1)) + dispMax[k-1]+1) clamped to [dispMax[k-1]+1, dispMax[k]]",
+  "bands": [
+   {
+    "classId": 0,
+    "name": "D",
+    "rawMin": 0.0,
+    "rawMax": 0.4345,
+    "displayMin": 100,
+    "displayMax": 500,
+    "reachable": true
+   },
+   {
+    "classId": 1,
+    "name": "C",
+    "rawMin": 0.4345,
+    "rawMax": 0.525628,
+    "displayMin": 501,
+    "displayMax": 600,
+    "reachable": true
+   },
+   {
+    "classId": 2,
+    "name": "B",
+    "rawMin": 0.525628,
+    "rawMax": 0.6179,
+    "displayMin": 601,
+    "displayMax": 700,
+    "reachable": true
+   },
+   {
+    "classId": 3,
+    "name": "A",
+    "rawMin": 0.6179,
+    "rawMax": 0.748432,
+    "displayMin": 701,
+    "displayMax": 800,
+    "reachable": true
+   },
+   {
+    "classId": 4,
+    "name": "S1",
+    "rawMin": 0.748432,
+    "rawMax": 0.846368,
+    "displayMin": 801,
+    "displayMax": 900,
+    "reachable": true
+   },
+   {
+    "classId": 5,
+    "name": "S2",
+    "rawMin": 0.846368,
+    "rawMax": 0.997086,
+    "displayMin": 901,
+    "displayMax": 998,
+    "reachable": true
+   },
+   {
+    "classId": 6,
+    "name": "X",
+    "rawMin": 0.997086,
+    "rawMax": 1.0,
+    "displayMin": 999,
+    "displayMax": 999,
+    "reachable": true
+   },
+   {
+    "classId": 7,
+    "name": "R",
+    "rawMin": 1.0,
+    "rawMax": 1.1,
+    "displayMin": 1000,
+    "displayMax": 999,
+    "reachable": false
+   }
+  ],
+  "examples": [
+   {
+    "carId": 247,
+    "raw": 0.329861,
+    "class": "D",
+    "display": 404
+   },
+   {
+    "carId": 249,
+    "raw": 0.578917,
+    "class": "B",
+    "display": 658
+   },
+   {
+    "carId": 251,
+    "raw": 0.368242,
+    "class": "D",
+    "display": 439
+   },
+   {
+    "carId": 1435,
+    "raw": 0.001466,
+    "class": "D",
+    "display": 101
+   },
+   {
+    "carId": 2034,
+    "raw": 0.996437,
+    "class": "S2",
+    "display": 998
+   }
+  ],
+  "catalogCheck": "game formula: 0 of 354 stock cars disagree with their ClassId",
+  "catalogPiField": {
+   "explanation": "crates/fi-gamedb fh2.json \"pi\" is round(raw*1000) (tools/gamedata/extract_fh2.py) while \"classes.maxPi\" is MaxDisplayPerformanceIndex (display scale) -> comparing them mixes scales (181 cars disagree by my count, you counted 187).",
+   "residualAfterReadingPiAsRaw": {
+    "count": 3,
+    "carIds": [
+     1325,
+     1658,
+     2254
+    ],
+    "cause": "3-decimal rounding of raw at a band edge (e.g. 0.6179x -> 618 > 0.6179)"
+   },
+   "fix": "store raw with 6 decimals (or the display PI from this formula) and compare raw to rawMin/rawMax"
+  },
+  "observedVsBands": "your raw x1000 per class (C 460..525, B 535..618, A 667..748, S1 749..846, S2 868..996, X 1000) sit inside the bands (C <=525.6, B <=617.9, A <=748.4, S1 <=846.4, S2 <=997.1); 618 for B is the same rounding edge"
+ }
+}

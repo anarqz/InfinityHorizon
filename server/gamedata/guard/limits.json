@@ -1,0 +1,22 @@
+{
+ "credits_rate_bands": [10000000, 50000000, 100000000, 500000000],
+ "credits_ceiling": 1000000000,
+ "unexplained_ceiling": 1000000000,
+ "winnings_ceiling": 1000000000,
+ "xp_ceiling": 100000000,
+ "levels_ceiling": 1000,
+ "day_unexplained_ceiling": 500000000,
+ "day_winnings_ceiling": 500000000,
+ "day_xp_ceiling": 50000000,
+ "day_levels_ceiling": 500,
+ "xp_rate_high": 10000000,
+ "levels_rate_high": 100,
+ "cars_rate_high": 100,
+ "unexplained_margin": 1000000,
+ "races_per_hour": 1000,
+ "ahead_credits": 100000000,
+ "ahead_credits_per_hour": 100000000,
+ "ahead_xp": 10000000,
+ "ahead_xp_per_hour": 10000000,
+ "behind_xp": 1000000
+}
