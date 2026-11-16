@@ -128,7 +128,7 @@ steps the first time:
    docker compose logs worlds | grep agent.started
    ```
 
-   The line carries `"publicKey":"<44 characters>"`.
+   The line is `{"ev":"agent.started",...,"publicKey":"<44 characters>",...,"vmId":"home-1"}`.
 
 2. Put it in `.env`, with this machine's LAN address and the UDP port, then restart the api:
 
@@ -141,9 +141,11 @@ steps the first time:
    ```
 
 `vmId` and `maxWorlds` must match `FI_WORLDS_VM_ID` and `FI_WORLDS_MAX_WORLDS` (defaults `home-1`
-and 8); `name` (1-48 characters) is what players see. Keep the single quotes. Within a minute the
-agent's hello succeeds and it opens its warm worlds: `docker compose logs worlds` stops showing
-refused hellos and `docker compose logs api | grep mm_official` shows the opened worlds.
+and 8); `name` (1-48 characters) is what players see. Keep the single quotes. Before this step the
+agent logs `agent.http.failed` with `"route":"hello","status":401` and retries (at most once a
+minute). Within a minute of the api's restart its hello succeeds and it opens its warm worlds:
+`docker compose logs worlds` shows `agent.hello` and `agent.world.opened`, and
+`docker compose logs api | grep mm_official` shows `mm_official_hello` and `mm_official_world`.
 
 The `endpoint` must be the LAN address, never `127.0.0.1`: the game connects to it through the
 hook's proof proxy, which is skipped for loopback addresses, and the engine accepts only proven
@@ -237,8 +239,9 @@ file when it refuses to start.
 | `api` exits at start, its log names `manifest.json` or a game-data file | The game data directory is missing or incomplete: run section 2 and check `FI_GAME_DATA_PATH`. |
 | `api` exits naming a variable | That setting is invalid; the log says why (for example `FI_WORLDS` JSON or its endpoint, which must be `ip:port`). |
 | `curl` to the LAN address cannot connect, `127.0.0.1` works | `FI_BIND_ADDRESS` is still `127.0.0.1`, or the host firewall blocks TCP 8080. Change `.env`, `docker compose up -d`. |
-| `/info` has no `trust`, or the launcher says the server did not answer as an Infinity server should | The launcher was pointed at a different origin than `FI_PUBLIC_URL`, or `FI_REALM` was set to the official name. |
-| `worlds` keeps logging refused hellos | `FI_WORLDS` is empty or its `vmId`/`publicKey` differ from the agent's: repeat section 5 and restart the api. |
+| The launcher says the server did not answer as an Infinity server should | The launcher was pointed at a different origin than `FI_PUBLIC_URL`, `FI_REALM` was set to the official name, or `/info` has no `trust` (compose.yml sets `FI_PUBLISH_TRUST_KEYS=true` on the api: keep it). |
+| `worlds` keeps logging `agent.http.failed` with `"route":"hello","status":401` (the api logs `mm_official_auth` refused) | `FI_WORLDS` is empty or its `vmId`/`publicKey` differ from the agent's: repeat section 5 and restart the api. |
+| `worlds` keeps logging `agent.http.failed` with `"kind":"network"` | The api is not running, or the pinned network's addresses were changed in only some places (Limits, last item). |
 | `worlds` exits with `agent.config.invalid` | The field it names is wrong (for example `FI_WORLDS_CATALOG` names a file that is not mounted). |
 | Players are placed in a world but never join it | The `FI_WORLDS` endpoint is `127.0.0.1` or not this machine's LAN address, or UDP 5102 is blocked by the host firewall. |
 | The api refuses to start with `FI_MAIL_BACKEND=log` | The server looks public (https or a DNS name in `FI_PUBLIC_URL`, or `trusted-proxy`) with sign-up open: turn mail on or close registration (section 11). |
