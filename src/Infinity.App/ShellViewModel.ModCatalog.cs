@@ -498,11 +498,16 @@ public sealed partial class ShellViewModel
     private async Task RetryStaleCatalogAsync()
     {
         if (_staleCatalogRetryPending || _staleCatalogRetries >= 3) return;
-        _staleCatalogRetryPending = true; _staleCatalogRetries++;
-        try { await Task.Delay(StaleCatalogRetryDelay, _updateStop.Token); }
+        _staleCatalogRetryPending = true;
+        try
+        {
+            await Task.Delay(StaleCatalogRetryDelay, _updateStop.Token);
+            // a game session or a mod operation: wait for it (not counted), never drop the retry
+            while (Playing || !ModsIdle || _catalogLoading) await Task.Delay(StaleCatalogRetryDelay, _updateStop.Token);
+        }
         catch (OperationCanceledException) { return; }
         finally { _staleCatalogRetryPending = false; }
-        if (Playing || !ModsIdle || _catalogLoading) return;
+        _staleCatalogRetries++;
         Log("mods: retrying the catalog after a stale detail (" + _staleCatalogRetries + " of 3)");
         await LoadModCatalogQuietlyAsync();
     }
@@ -539,7 +544,8 @@ public sealed partial class ShellViewModel
 
     private async Task FetchCatalogAsync()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // T-1117: a first schema-3 load fetches every detail (8 at a time); the ones fetched stay cached if it still times out
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         ModCatalog catalog;
         if (CatalogFetchForTests is { } fake) catalog = await fake(timeout.Token);
         else if (DevelopmentMods)

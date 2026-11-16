@@ -228,6 +228,8 @@ public static partial class OfficialModCatalog
         ArgumentNullException.ThrowIfNull(url);
         url = Canonical(url);
         var path = CachePath(cacheDirectory, url);
+        // the first offline start after 3.1.7: the official v2 file 3.1.6 cached (a local read only; the network reads the index alone)
+        if (!File.Exists(path) && Same(url, OfficialUrl) && File.Exists(CachePath(cacheDirectory, FormerOfficialUrl))) path = CachePath(cacheDirectory, FormerOfficialUrl);
         try
         {
             if (!File.Exists(path) || new FileInfo(path).Length > MaxCatalogBytes) return null;

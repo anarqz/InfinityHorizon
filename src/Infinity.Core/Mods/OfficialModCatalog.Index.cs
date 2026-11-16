@@ -193,7 +193,8 @@ public static partial class OfficialModCatalog
         if (!Directory.Exists(cache)) return;
         var kept = index.Select(e => e.Sha256 + ".json").ToHashSet(StringComparer.Ordinal);
         foreach (var file in Directory.EnumerateFiles(cache))
-            if (!kept.Contains(Path.GetFileName(file)))
+            // another load's staging file (".tmp") is that load's to move, never this one's to delete
+            if (!kept.Contains(Path.GetFileName(file)) && !file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
                 try { ManagedModFiles.RemoveFile(file); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 
