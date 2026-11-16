@@ -25,7 +25,7 @@ ARG PROFILE=release
 WORKDIR /repo
 COPY . .
 RUN --mount=type=cache,id=fi-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=fi-cargo-target,target=/repo/target,sharing=locked \
+    --mount=type=cache,id=fi-platform-target,target=/repo/target,sharing=locked \
     cargo build --profile "${PROFILE}" --locked --package fi-platform --bin fi-platform \
                 --package fi-cli --bin fi-cli \
  && dir=$( [ "${PROFILE}" = dev ] && echo debug || echo "${PROFILE}" ) \

@@ -12,13 +12,17 @@ Runs the extractors of this folder and writes `<dir>/manifest.json`:
 | fh2/catalog.json | extract_fh2.py | <fh2>/media/stripped/gamedbRC.slt, stringtables/EN.zip (+ --pt-br) |
 | fh2/parts.json | extract_fh2.py --parts | <fh2>/media/stripped/gamedbRC.slt |
 | fh2/packs.json | extract_fh2_packs.py | --packs (the installed car packs), else an empty list |
-| fm5/xtsw-schema.json | extract_schema.py | --fm5-exe |
+| fm5/xtsw-schema.json | extract_schema.py | --fm5-exe (only for a server that serves FM5) |
 
 The other files the server reads (`MANUAL` below) are not files of an install: they are our own
 tables (identifiers, limits, layouts and corrections we wrote or measured), published with the
 server in the `gamedata/` folder next to `tools/` (TABLES). The tool copies each of them into
 `<dir>`, then stops with the list of anything still missing, or writes the manifest. The server
 refuses to start without any of them (tools/gamedata/README.md).
+
+Without `--fm5-exe` the FM5 schema is not built and the manifest lists only what was: such a
+directory serves a server whose `FI_GAMES` does not include `fm5` (the server requires a game's
+files only when it serves that game).
 
 The FH2 catalog matches the official one byte for byte only when built with the install's pt-BR
 stringtable (`--pt-br <fh2>/media/stripped/stringtables/br.zip`). Without `--packs`,
@@ -37,6 +41,8 @@ TABLES = os.path.join(os.path.dirname(os.path.dirname(HERE)), "gamedata")
 
 # Every file the server reads (crate fi-surfaces, `gamedata::load`).
 BUILT = ["fh2/xtsw-schema.json", "fh2/catalog.json", "fh2/parts.json", "fh2/packs.json", "fm5/xtsw-schema.json"]
+# The BUILT files only a server serving that game reads (FI_GAMES), built only from its input.
+FM5 = ["fm5/xtsw-schema.json"]
 MANUAL = [
     "fh2/car-names.json",
     "fh2/card-ids.json",
@@ -102,9 +108,10 @@ def copy_tables(out, tables=None):
     return copied
 
 
-def missing(out):
-    """The files the server needs that `out` does not hold."""
-    return [f for f in BUILT + MANUAL if not os.path.isfile(os.path.join(out, f))]
+def missing(out, fm5=True):
+    """The files the server needs that `out` does not hold (FM5's only with `fm5`)."""
+    needed = [f for f in BUILT if fm5 or f not in FM5] + MANUAL
+    return [f for f in needed if not os.path.isfile(os.path.join(out, f))]
 
 
 def parse(argv):
@@ -137,7 +144,10 @@ def main(argv):
             f.write(json.dumps({"cars": []}, indent=1) + "\n")
     copied = copy_tables(out)
     print(f"copied {len(copied)} published tables from {TABLES}", file=sys.stderr)
-    lacking = missing(out)
+    fm5 = bool(opts.get("fm5_exe"))
+    if not fm5:
+        print("no --fm5-exe: FM5 not built; serve FI_GAMES without fm5", file=sys.stderr)
+    lacking = missing(out, fm5)
     if lacking:
         print("still missing (see tools/gamedata/README.md):", file=sys.stderr)
         for name in lacking:

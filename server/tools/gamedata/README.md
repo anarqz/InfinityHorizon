@@ -49,7 +49,7 @@ python3 -I tools/gamedata/build.py --out /srv/gamedata --fh2 "<FH2 install>" \
 | fh2/catalog.json | `extract_fh2.py` | `<FH2>/media/stripped/gamedbRC.slt`, `stringtables/EN.zip` (+ `--pt-br`) |
 | fh2/parts.json | `extract_fh2.py --parts` | `gamedbRC.slt` |
 | fh2/packs.json | `extract_fh2_packs.py` | each pack's `mod.json`, `database.json`, `strings.json` |
-| fm5/xtsw-schema.json | `extract_schema.py` | Forza Motorsport 5's executable |
+| fm5/xtsw-schema.json | `extract_schema.py` | Forza Motorsport 5's executable (only for `FI_GAMES` with `fm5`; without `--fm5-exe` it is not built) |
 
 and then `manifest.py write <out>`. After editing any file by hand, run
 `python3 -I tools/gamedata/manifest.py write <dir>` (`check` verifies it).

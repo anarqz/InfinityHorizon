@@ -19,8 +19,8 @@ ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7d
 FROM ${RUST_IMAGE} AS build
 WORKDIR /repo
 COPY native/worlds/ ./
-RUN --mount=type=cache,id=fi-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=fi-cargo-target,target=/repo/target,sharing=locked \
+RUN --mount=type=cache,id=fi-worlds-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=fi-worlds-target,target=/repo/target,sharing=locked \
     cargo build --release --locked --bin worlds \
  && install -D target/release/worlds /out/bin/worlds \
  && install -d -m 0700 /out/run/fi-ds /out/var/lib/worlds

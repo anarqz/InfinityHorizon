@@ -71,6 +71,26 @@ class BuildTest(unittest.TestCase):
             with open(os.path.join(out, "fh2", "economy.json")) as f:
                 self.assertEqual(f.read(), "fh2/economy.json")
             self.assertEqual(sorted(build.missing(out)), sorted(build.BUILT))
+            # Without FM5 its schema is not required.
+            self.assertEqual(sorted(build.missing(out, fm5=False)),
+                             sorted(f for f in build.BUILT if f not in build.FM5))
+
+    def test_a_server_without_fm5_gets_a_complete_directory(self):
+        with tempfile.TemporaryDirectory() as out:
+            for name in build.BUILT:
+                if name in build.FM5:
+                    continue
+                os.makedirs(os.path.join(out, os.path.dirname(name)), exist_ok=True)
+                with open(os.path.join(out, name), "w") as f:
+                    f.write("{}")
+            # The published tables come from this tree's gamedata/ (the copy step).
+            if os.path.isdir(build.TABLES) and all(
+                    os.path.isfile(os.path.join(build.TABLES, m)) for m in build.MANUAL):
+                self.assertEqual(build.main(["build.py", "--out", out]), 0)
+                with open(os.path.join(out, "manifest.json")) as f:
+                    listed = json.load(f)["files"]
+                self.assertNotIn("fm5/xtsw-schema.json", listed)
+                self.assertIn("fh2/catalog.json", listed)
 
 
 class FakeImage:

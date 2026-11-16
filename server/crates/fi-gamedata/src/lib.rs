@@ -10,7 +10,7 @@
 //!   fh2/xtsw-schema.json      the web-service schema (fi-xtsw)
 //!   fh2/catalog.json          cars, classes, buckets, tracks, perks (fi-gamedb)
 //!   fh2/...                   the other FH2 tables (tools/gamedata/README.md lists every file)
-//!   fm5/xtsw-schema.json      Forza Motorsport 5's web-service schema (fi-xtsw)
+//!   fm5/xtsw-schema.json      Forza Motorsport 5's web-service schema (fi-xtsw; only when FI_GAMES has fm5)
 //! ```
 //!
 //! A process opens the directory once ([`dir`]) and each table is parsed once, on first use, into a

@@ -34,9 +34,9 @@ Every command below runs from this folder (`server/` of the clone) unless it say
   RAM and about 15 GB of free disk for the first build (the Rust build cache is most of it).
 - Docker Engine 26+ with Compose v2.24+ (`docker compose version`).
 - Python 3.10+ with `pefile`, for the game-data step only.
-- Your own Forza Horizon 2 PC install (the one Infinity plays), and the executable of your Forza
-  Motorsport 5 install (`forza_durango_release_final.exe`): the server reads both games'
-  web-service schemas, and the build stops without the FM5 one.
+- Your own Forza Horizon 2 PC install (the one Infinity plays). Only to serve Forza Motorsport 5
+  too: the executable of your FM5 install (`forza_durango_release_final.exe`) and
+  `FI_GAMES=fh2,fm5` in `.env`.
 - The machine's LAN address (for example `192.0.2.10`; `ip -4 addr` on Linux, `ipconfig` on
   Windows). The game PCs must reach it on TCP `8080` and UDP `5102` (open them in its firewall).
 - On every game PC: a released Infinity launcher whose hook build is 89 or newer.
@@ -49,7 +49,7 @@ Docker; the toolchain is pinned in `rust-toolchain.toml`.
 The server ships no game file, and never will: Forza Horizon 2's and Forza Motorsport 5's files
 are not ours to distribute. Before it starts, the server needs a game data directory
 (`FI_GAME_DATA_DIR`) that you build from your own install. The extractor reads your game files and
-writes five files; the 13 tables already in `gamedata/fh2/` (car names, card ids, economy,
+writes four files (five with FM5); the 13 tables already in `gamedata/fh2/` (car names, card ids, economy,
 gate tables and confirmations, leaderboards, the PlayerDatabase schema, the stats boards, extras
 and layout, storefront keywords, top speeds) and the guardrail limits in `gamedata/guard/` are our
 own work, published here under the AGPL with the code.
@@ -58,8 +58,7 @@ own work, published here under the AGPL with the code.
 python3 -m venv .venv && .venv/bin/pip install pefile
 FH2="/path/to/Forza Horizon 2"            # the folder holding forza_durango_release_final.exe and media/
 .venv/bin/python3 -I tools/gamedata/build.py --out gamedata --fh2 "$FH2" \
-  --pt-br "$FH2/media/stripped/stringtables/br.zip" \
-  --fm5-exe "/path/to/Forza Motorsport 5/forza_durango_release_final.exe"
+  --pt-br "$FH2/media/stripped/stringtables/br.zip"
 ```
 
 - `--out gamedata` completes this folder's `gamedata/` in place (its `.gitignore` keeps the
@@ -67,6 +66,9 @@ FH2="/path/to/Forza Horizon 2"            # the folder holding forza_durango_rel
   `FI_GAME_DATA_PATH` at it in `.env`.
 - `--pt-br` adds the Brazilian Portuguese car and track names. Without it the catalog is valid but
   differs from the official server's.
+- `--fm5-exe "<FM5 install>/forza_durango_release_final.exe"` adds FM5's schema, for a server
+  with `FI_GAMES=fh2,fm5`. Without it the tool says FM5 was not built, and a server whose
+  `FI_GAMES` names `fm5` refuses to start naming the missing file.
 - `--packs <folder of installed car packs>` lists your car packs. Without it `fh2/packs.json` is
   `{"cars": []}`, which is fine for a server without car packs.
 - The tool ends with `gamedata: complete, manifest written`. If it prints `still missing`, the
