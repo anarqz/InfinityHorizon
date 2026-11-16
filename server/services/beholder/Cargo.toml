@@ -1,0 +1,30 @@
+# fi-beholder: the announcement directory (docs/contracts/ANNOUNCER_API.md, CR-S54). One small
+# process with its own SQLite file: servers and relays announce themselves (Ed25519-signed), launchers
+# read the lists. No player data, no outbound request. Built static (x86_64 musl) for a small container.
+[package]
+name = "fi-beholder"
+version = "0.1.0"
+description = "ForzaInfinity beholder: the signed announcement directory of servers and relays."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fi-protocol = { path = "../../crates/fi-protocol" }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "query"] }
+base64 = "=0.22.1"
+ed25519-dalek = "=3.0.0"
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
+serde_json = "=1.0.154"
+time = { version = "=0.3.55", features = ["formatting"] }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+
+[dev-dependencies]
+# The nodes' announcer (fi-platform, fi-relay-vm): its real posts are tested against this router.
+fi-announce = { path = "../../crates/fi-announce" }
+tower = { version = "=0.5.3", features = ["util"] }
+http-body-util = "=0.1.5"
+
+[lints.rust]
+unsafe_code = "forbid"

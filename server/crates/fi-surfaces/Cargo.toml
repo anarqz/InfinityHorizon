@@ -1,0 +1,64 @@
+# fi-surfaces (was services/api, fi-api; moved by OD-122 M1, ADR 0023 §1): the router library of the
+# account plane and the game plane that every deployable composes. Its v0 binary (`fi-surfaces`, the
+# ADR 0002 FI_SURFACES/FI_POOL model) is deleted with the five old binaries after the cutover.
+[package]
+name = "fi-surfaces"
+version = "0.0.0"
+description = "ForzaInfinity HTTP API: account plane (launcher, portal) and game plane (hook), one image, several deployments."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# `form`: the e-mail confirmation and password pages post plain HTML forms (CR-S53).
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "query", "form", "matched-path", "tracing"] }
+fi-auth = { path = "../fi-auth" }
+fi-content = { path = "../fi-content" }
+fi-db = { path = "../fi-db" }
+fi-domain = { path = "../fi-domain" }
+# A `local` instance's confirmation and password mail (CR-S53).
+fi-mail = { path = "../fi-mail" }
+fi-protocol = { path = "../fi-protocol" }
+fi-runtime = { path = "../fi-runtime" }
+# The save use cases (upload order, verification, re-hashed download) over PgSaveStore and the
+# bucket adapter.
+fi-saves = { path = "../fi-saves" }
+fi-storage = { path = "../fi-storage" }
+# The bin/xtsw codec and the game's schema of the proxied Forza RPC (GAME_PLATFORM.md §3a).
+fi-xtsw = { path = "../fi-xtsw" }
+# The game data directory (FI_GAME_DATA_DIR, T-1115): checked at start by `gamedata::load`.
+fi-gamedata = { path = "../fi-gamedata" }
+# `parts`: the parts shop's list prices for the OD-178 purchasedParts gate (game data fh2/parts.json).
+fi-gamedb = { path = "../fi-gamedb", features = ["parts"] }
+# The save's PlayerDatabase, read for the fresh-start check of a Hardcore line's first save (CR-S51).
+fi-playerdb = { path = "../fi-playerdb" }
+# The Hardcore guardrails' assessment (OD-62) on the profile syncs and the save commits.
+fi-guard = { path = "../fi-guard" }
+# Google's fixed securetoken JWKS endpoint; bounded HTTPS refresh outside database transactions.
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+# Field paths in REQUEST.INVALID details (`device.platform`); the version axum's json feature uses.
+serde_path_to_error = "=0.1.20"
+# Transactions over fi-db's functions (the features come from fi-db).
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tracing = "=0.1.44"
+# v5: progression facts' ids, UUIDv5(profile id, X-Fh2-Request-Id) (GAME_PLATFORM.md §2.2).
+uuid = { version = "=1.28.0", features = ["v5", "v7"] }
+
+[dev-dependencies]
+# End-to-end RSA signature/rotation tests, entirely synthetic and offline.
+jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["rust_crypto"] }
+rsa = { version = "=0.9.10", features = ["getrandom"] }
+# The e2e suite checks the launch tickets' Ed25519 signature with the published key.
+ed25519-dalek = "=3.0.0"
+tower = { version = "=0.5.3", features = ["util"] }
+# The mail e2e captures every log line to prove no address, link or token reaches one (CR-S53).
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["std", "fmt", "registry"] }
+# tests/gamedata_official.rs (private): digests of the official game data's parsed tables.
+sha2 = "=0.11.1"
+
+[lints.rust]
+unsafe_code = "forbid"

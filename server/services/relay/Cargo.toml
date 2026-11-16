@@ -1,0 +1,37 @@
+# fi-relay-vm: the relay VM's process (ADR 0017 §2; MATCHMAKING_API.md §5): the fi-relay UDP core on
+# the binding port (3478) and the rendezvous port (5101), verifying relay grants with public keys.
+# No database and no FI secret: configuration is FI_RELAY_* only, plus the optional beholder
+# announcer (FI_BEHOLDER_URL, FI_ANNOUNCE_*: one outbound HTTPS post every 30 s, signed by the
+# node's own directory key). Runs in a container on Container-Optimized OS or a plain VM (infra/relay).
+[package]
+name = "fi-relay-vm"
+version = "0.0.0"
+description = "ForzaInfinity relay VM: UDP binding answers, grant-paired rendezvous and the capped fallback forwarder."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "=0.22.1"
+# The detector's report signing (per-start session key certified by the node key; MATCHMAKING_API.md §5d).
+ed25519-dalek = "=3.0.0"
+fi-announce = { path = "../../crates/fi-announce" }
+# The anti-cheat detector (§5d): decoder, rings, evaluation, certificates; no I/O.
+fi-netwatch = { path = "../../crates/fi-netwatch" }
+fi-protocol = { path = "../../crates/fi-protocol" }
+fi-relay = { path = "../../crates/fi-relay" }
+fi-runtime = { path = "../../crates/fi-runtime" }
+getrandom = "=0.4.3"
+# The detector's calls to the platform (same pin and features as fi-announce's announcer).
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tracing = "=0.1.44"
+
+[dev-dependencies]
+serde_json = "=1.0.154"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "io-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+

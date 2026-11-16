@@ -1,0 +1,14 @@
+-- Requests to join belong to the asking play session (2026-10-23; OD-112 review fix;
+-- docs/contracts/MATCHMAKING_API.md §2.7, §3.4). A request's mod set is checked when it is sent
+-- (`POST /mm/v1/worlds/{id}/requests {mods?}`); its acceptance must seat that same session, so an
+-- asker who relaunches with another mod set (or another `modded` flag) inside the request's two
+-- minutes is refused (409 PORTAL.CONFLICT {reason: "not_allowed"}) instead of being seated under
+-- the old check. NULL: a request sent before this migration (or an invite); a NULL request is
+-- refused on acceptance (it lapses within two minutes anyway).
+--
+-- Deployment order (OD-112): apply this and 20261023100000/20261023110000 and deploy the server
+-- images before any launcher that sends `mods` or `modded` is released (an older server refuses
+-- them as unknown fields). The worlds-overlay list index `world_open_list` (20261019170000) is superseded by
+-- `world_open_list_vanilla`/`world_open_list_modded` and is to be dropped in a later forward
+-- migration once production plans confirm nothing reads it.
+ALTER TABLE world_invite ADD COLUMN from_session_id uuid;

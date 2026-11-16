@@ -1,0 +1,9 @@
+# Settings every cargo command of this workspace gets.
+#
+# The game data directory (crate fi-gamedata): the server compiles with no game data and reads it
+# at run time from FI_GAME_DATA_DIR. Tests and `cargo run` use the `gamedata/` folder of this tree
+# (`python3 -I tools/gamedata/build.py --out gamedata ...` completes it from your own game
+# install); an explicit FI_GAME_DATA_DIR wins. Deployed binaries do not run through cargo: their
+# environment sets FI_GAME_DATA_DIR itself.
+[env]
+FI_GAME_DATA_DIR = { value = "gamedata", relative = true }

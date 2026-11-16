@@ -1,0 +1,27 @@
+# The `bin/xtsw` codec of Forza Horizon 2's Xls web services (SER-3.1, SER-M3 port map §6 step 2):
+# the type schema read from the game (loaded at start from FI_GAME_DATA_DIR), a dynamic value model that maps to JSON,
+# `_Parameters` / `_Results` codecs and the 12-byte reply envelope. Library only: no I/O, no clock.
+[package]
+name = "fi-xtsw"
+version = "0.0.0"
+description = "ForzaInfinity bin/xtsw codec: FH2 web-service schema, values, request and reply bodies, envelopes."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The game data directory: the schemas are its files, never compiled in (T-1115).
+fi-gamedata = { path = "../fi-gamedata" }
+# Exact pins (the porthub saveExact rule); versions match the other workspace crates.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+
+# Golden tests only (tests/golden.rs reads base64 bodies from capture files at run time).
+[dev-dependencies]
+base64 = "=0.22.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

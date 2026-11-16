@@ -1,0 +1,24 @@
+# Wire contracts of the v1 client APIs (docs/contracts/): request and response bodies, header
+# names and the error envelope with its stable codes. Leaf crate: serde only, no internal deps,
+# so the launcher and tools can depend on it without pulling in the server.
+[package]
+name = "fi-protocol"
+version = "0.0.0"
+description = "ForzaInfinity v1 API wire contracts: DTOs, headers, error envelope and codes."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+# Parity checks only (tests/parity.rs): the library itself stays a leaf.
+[dev-dependencies]
+fi-domain = { path = "../fi-domain" }
+fi-saves = { path = "../fi-saves" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

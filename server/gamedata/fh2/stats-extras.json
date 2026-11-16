@@ -1,0 +1,259 @@
+{
+ "generatedAt": "2026-11-01T15:36:25Z",
+ "task": "T-PD-S4 (extras for ~/re/fh2-stats-screen-spec.txt / docs/web/PLAY_STATS_SCREEN.md)",
+ "source": "forza_durango_release_final.exe (Ghidra FH2_DURANGO, read-only): stat value functions -> CNumUnitString unit categories; CUnitSystemManager ctor FUN_141241120 (7 unit systems x 0x2d categories); unit factor table FUN_141240590 (base 0x143661a10, 0x28/entry); MaxAchievable/* registry defaults (no GameTunableSettings.ini override); FUN_140c19cc0 overall completion; FUN_140b30a10 radio. Plausibility checked on the SAURON test save.",
+ "unitSystems": {
+  "0": "US imperial (mph, miles, ft, in, lbf, F)",
+  "1": "UK (mph, miles; metric otherwise)",
+  "2-6": "metric (km/h, km, m, cm, N, C)",
+  "note": "pick metric for pt-BR and most locales, US for en-US; UK optional"
+ },
+ "units": {
+  "duration": {
+   "stored": "seconds (integer)",
+   "display": "h:mm:ss",
+   "evidence": "Main/TimeDriven 10852 with DistanceDriven 273150 m -> 25 m/s average"
+  },
+  "distance": {
+   "stored": "metres",
+   "metric": "km = m * 0.001",
+   "us": "mi = m * 0.000621371",
+   "decimals": 2,
+   "rows": [
+    "Main/DistanceDriven",
+    "MiscStats/RoadTripDistanceDriven",
+    "MiscStats/OnlineRoadTripDistanceDriven"
+   ]
+  },
+  "speed": {
+   "stored": "m/s",
+   "metric": "km/h = m/s * 3.6",
+   "us": "mph = m/s * 2.2369",
+   "decimals": 0,
+   "rows": [
+    "Main/TopSpeed",
+    "avg speed = DistanceDriven/TimeDriven (m/s)"
+   ]
+  },
+  "length": {
+   "stored": "metres",
+   "metric": "m",
+   "us": "ft = m * 3.28084",
+   "decimals": {
+    "metric": 2,
+    "us": 1
+   },
+   "rows": [
+    "Main/LongestDrift",
+    "Main/LongestJump"
+   ]
+  },
+  "biggestAir": {
+   "stored": "seconds of air time (f32)",
+   "display": "seconds",
+   "decimals": 2,
+   "rows": [
+    "MiscStats/BiggestAir"
+   ]
+  },
+  "gForce": {
+   "stored": "g",
+   "display": "g",
+   "decimals": 3,
+   "rows": [
+    "Main/Max|Avg Lateral|Acceleration|Braking Gs"
+   ]
+  },
+  "tireLoad": {
+   "stored": "hectonewtons (x100 N)",
+   "metric": "N = stored * 100",
+   "us": "lbf = stored * 22.4809",
+   "decimals": 2,
+   "evidence": "avg load 24..38 -> 2.4..3.8 kN per tire"
+  },
+  "tireTemp": {
+   "stored": "degrees Fahrenheit",
+   "metric": "C = (F - 32) * 5/9",
+   "us": "F",
+   "decimals": 1,
+   "evidence": "max 245 / avg 110 (F)"
+  },
+  "suspensionStroke": {
+   "stored": "metres",
+   "metric": "cm = m * 100",
+   "us": "in = m * 39.3701",
+   "decimals": {
+    "metric": 1,
+    "us": 2
+   }
+  },
+  "progressPercent": {
+   "stored": "percent 0..100",
+   "display": "min(value,100) %",
+   "rows": [
+    "CompareStats/HorizonFinalProgress",
+    "CompareStats/HorizonFinalProgress2",
+    "Island/FinalProgress"
+   ]
+  },
+  "credits": "integer credits",
+  "xp": "integer XP"
+ },
+ "totals": {
+  "note": "\"n / total\" rows: total = MaxAchievable/* (compiled defaults, not overridden). Case id = FUN_140324680 switch.",
+  "rows": {
+   "CompareStats/BarnFinds": {
+    "total": 10,
+    "key": "MaxAchievable/BarnFinds"
+   },
+   "CompareStats/SmallValueBoardsSmashed": {
+    "total": 50,
+    "key": "MaxAchievable/LowValueCreditBoards"
+   },
+   "CompareStats/MediumValueBoardsSmashed": {
+    "total": 35,
+    "key": "MaxAchievable/MediumValueCreditBoards"
+   },
+   "CompareStats/HighValueBoardsSmashed": {
+    "total": 15,
+    "key": "MaxAchievable/HighValueCreditBoards"
+   },
+   "CompareStats/FastTravelBoardsSmashed": {
+    "total": 50,
+    "key": "MaxAchievable/FastTravelBoards"
+   },
+   "CompareStats/DiscountBoardsSmashed": {
+    "total": 150,
+    "key": "sum of the four board kinds (no tab row; used by overall completion)"
+   },
+   "CompareStats/RoadsDiscovered": {
+    "total": 315,
+    "key": "MaxAchievable/RoadsToDiscover"
+   },
+   "CompareStats/SpeedTrapsTriggered": {
+    "total": 30,
+    "key": "MaxAchievable/SpeedTraps"
+   },
+   "CompareStats/SpeedZonesTriggered": {
+    "total": 15,
+    "key": "MaxAchievable/SpeedZones"
+   },
+   "CompareStats/BucketlistEventsCompleted": {
+    "total": 55,
+    "key": "MaxAchievable/BucketListEvents"
+   },
+   "CompareStats/CarMeetsDiscovered": {
+    "total": 6,
+    "key": "MaxAchievable/CarMeets"
+   },
+   "CompareStats/DestinationsVisited": {
+    "total": 6,
+    "key": "MaxAchievable/Destinations"
+   },
+   "CompareStats/ShowcasesWon": {
+    "total": 5,
+    "key": "MaxAchievable/Showcases"
+   },
+   "CompareStats/PerksUnlocked": {
+    "total": 25,
+    "key": "MaxAchievable/SkillPerks"
+   },
+   "MiscStats/UpgradesBoardsSmashed": {
+    "total": 25,
+    "key": "MaxAchievable/UpgradeBoards (Storm Island tab)"
+   },
+   "Island/RoadsDiscovered": {
+    "total": 50,
+    "key": "MaxAchievable/IslandRoadsToDiscover"
+   },
+   "Island/SpeedTrapsTriggered": {
+    "total": 5,
+    "key": "MaxAchievable/IslandSpeedTraps"
+   },
+   "Island/SpeedZonesTriggered": {
+    "total": 5,
+    "key": "MaxAchievable/IslandSpeedZones"
+   },
+   "Island/BucketlistEventsCompleted": {
+    "total": 8,
+    "key": "MaxAchievable/IslandBucketListEvents"
+   }
+  },
+  "otherMaxAchievable": {
+   "Championships": 168,
+   "CareerEvents": 673,
+   "IslandChampionships": 24,
+   "IslandCoopBucketListEvents": 8
+  }
+ },
+ "radioStations": {
+  "0": "None",
+  "1": "Horizon Pulse",
+  "2": "Horizon Bass Arena",
+  "3": "Horizon XS",
+  "4": "Levante FM",
+  "5": "Hospital Records Radio",
+  "6": "Ninja Tune Radio",
+  "7": "Innovative Leisure Radio",
+  "8": "Xbox Music",
+  "9": "E3",
+  "note": "MyProfile IDS_RadioStation{n}_Name / IDS_RadioStation_None; pt-BR identical except 0 = \"Nenhum\". Station names are brand names (data); \"None\" is UI copy."
+ },
+ "overallCompletion": {
+  "computableFromServer": true,
+  "formula": "pct = 100 * ( (1 - w) * 0.1 * SUM_i min-free(stat_i / total_i) + w * (championshipsCompleted / 168) ), w = 0.5",
+  "w": {
+   "value": 0.5,
+   "key": "UI/GameStatistics/Overall_ChampionshipCompletionImportance (range 0.05..1, not overridden)"
+  },
+  "terms": [
+   [
+    "compareStats.barnFinds",
+    10
+   ],
+   [
+    "compareStats.discountBoardsSmashed",
+    150
+   ],
+   [
+    "compareStats.speedTrapsTriggered",
+    30
+   ],
+   [
+    "compareStats.speedZonesTriggered",
+    15
+   ],
+   [
+    "compareStats.carMeetsDiscovered",
+    6
+   ],
+   [
+    "compareStats.destinationsVisited",
+    6
+   ],
+   [
+    "compareStats.perksUnlocked",
+    25
+   ],
+   [
+    "compareStats.showcasesWon",
+    5
+   ],
+   [
+    "compareStats.bucketlistEventsCompleted",
+    55
+   ],
+   [
+    "compareStats.roadsDiscovered",
+    315
+   ]
+  ],
+  "championshipsCompleted": "the game reads its career count of completed championships (= PlayerDatabase Career_ChampionshipsCompleted rows); the synced miscStats[0].carChampionshipsCompleted holds the same counter (3 = 3 rows on the SAURON test save). Use that.",
+  "notes": "ratios are not clamped by the game; displayed with 1 decimal (unit category 1 = percent). Example SAURON test save: 12.4 %."
+ },
+ "numPerfectVsUltimate": {
+  "status": "not confirmed",
+  "findings": "the exe has no Main/NumPerfect* profile path; Main/NumUltimate{Drifts,Speeds,Drafts,Passes} exist only as profile stats. playerRaceHistory.numPerfect{Drifts,Drafts,Passes,Speeds} are legacy Forza fields whose filler was not traced.",
+  "suggestion": "compare one stored UpdateAll playerRaceHistory[0].numPerfect* with the same player save Main/NumUltimate* (SAURON test save: Drifts 0, Speeds 3, Drafts 5, Passes 16); until then keep 0x7f-0x82 save-only or omitted."
+ }
+}

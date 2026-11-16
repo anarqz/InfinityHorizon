@@ -1,0 +1,193 @@
+{
+ "generatedAt": "2026-11-01T22:34:04Z",
+ "supersedes": "fh2-leaderboards.json families 4/7..4/15 (T-PD-S3 inferred enum+5; wrong for 4/7..4/12)",
+ "method": "FUN_1405ec7a0 (submit ambient score; called by each activity) builds the key: scoreType = FUN_1405eb2e0(AmbientLeaderboardType), scoreboardType = 9 when scoreType is 5 or 6, else 4. FUN_1405eb2e0 is an explicit switch: 0->5,1->6,2->9,3->12,4->8,5->10,6->7,7->11,8->13,9->14,10->15.",
+ "submission": "snapshot: every caller submits the same absolute value it gives the in-world rivals comparison (running total after the event, or the best skill chain), not an increment; the board keeps the best (highest).",
+ "boards": [
+  {
+   "key": "9/5",
+   "scoreboardType": 9,
+   "scoreType": 5,
+   "ambientEnum": 0,
+   "ambientName": "SpeedTrap",
+   "meaning": "per-camera board, gameScoreboardId = camera 1..55",
+   "better": "higher",
+   "unit": "m/s"
+  },
+  {
+   "key": "9/6",
+   "scoreboardType": 9,
+   "scoreType": 6,
+   "ambientEnum": 1,
+   "ambientName": "SpeedZone",
+   "meaning": "per-camera board, gameScoreboardId = camera 1..55",
+   "better": "higher",
+   "unit": "m/s"
+  },
+  {
+   "key": "4/9",
+   "scoreboardType": 4,
+   "scoreType": 9,
+   "ambientEnum": 2,
+   "ambientName": "DiscountBoard",
+   "meaning": "bonus boards smashed, all four kinds (mainland)",
+   "max": 150,
+   "maxSource": "MaxAchievable/LowValue+MediumValue+HighValue+FastTravel boards = 50+35+15+50",
+   "matchingProfileStat": "CompareStats/DiscountBoardsSmashed",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 76,
+    "noobMax": 95,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/12",
+   "scoreboardType": 4,
+   "scoreType": 12,
+   "ambientEnum": 3,
+   "ambientName": "BucketList",
+   "meaning": "bucket list challenges completed (mainland)",
+   "max": 55,
+   "maxSource": "MaxAchievable/BucketListEvents",
+   "matchingProfileStat": "CompareStats/BucketlistEventsCompleted",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 14,
+    "noobMax": 22,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/8",
+   "scoreboardType": 4,
+   "scoreType": 8,
+   "ambientEnum": 4,
+   "ambientName": "BarnFinds",
+   "meaning": "barn finds discovered",
+   "max": 10,
+   "maxSource": "MaxAchievable/BarnFinds",
+   "matchingProfileStat": "CompareStats/BarnFinds",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 3,
+    "noobMax": 9,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/10",
+   "scoreboardType": 4,
+   "scoreType": 10,
+   "ambientEnum": 5,
+   "ambientName": "RoadDiscovery",
+   "meaning": "roads discovered (mainland)",
+   "max": 315,
+   "maxSource": "MaxAchievable/RoadsToDiscover",
+   "matchingProfileStat": "CompareStats/RoadsDiscovered",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 307,
+    "noobMax": 315,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/7",
+   "scoreboardType": 4,
+   "scoreType": 7,
+   "ambientEnum": 6,
+   "ambientName": "PhotoChallenge",
+   "meaning": "Horizon Promo: car models photographed (photo_collection entity, PhotoChallengeComponent)",
+   "max": 354,
+   "maxSource": "no MaxAchievable; bounded by photographable car models <= 354 catalog cars (Data_Car); PhotoChallengeRanks.xml ranks go to 420",
+   "matchingProfileStat": "CompareStats/PhotoChallengesCompleted (profile stat of the same activity; verify equality)",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 4,
+    "noobMax": 331,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/11",
+   "scoreboardType": 4,
+   "scoreType": 11,
+   "ambientEnum": 7,
+   "ambientName": "RaceEncounter",
+   "meaning": "head-to-head race encounters won",
+   "max": null,
+   "maxSource": "no fixed maximum (repeatable)",
+   "matchingProfileStat": "CompareStats/RaceEncountersWon",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 5,
+    "noobMax": 33,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/13",
+   "scoreboardType": 4,
+   "scoreType": 13,
+   "ambientEnum": 8,
+   "ambientName": "SkillsCombo",
+   "meaning": "best skill chain score (points)",
+   "max": null,
+   "maxSource": "no fixed maximum",
+   "matchingProfileStat": "SaveState SkillsState.BestSkillsCombo (save); profile Main/HighestSkillScore",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": 274900,
+    "noobMax": 265380,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/14",
+   "scoreboardType": 4,
+   "scoreType": 14,
+   "ambientEnum": 9,
+   "ambientName": "IslandRoadDiscovery",
+   "meaning": "Storm Island roads discovered",
+   "max": 50,
+   "maxSource": "MaxAchievable/IslandRoadsToDiscover",
+   "matchingProfileStat": "Island/RoadsDiscovered (save only)",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": null,
+    "noobMax": 50,
+    "withinMax": true
+   }
+  },
+  {
+   "key": "4/15",
+   "scoreboardType": 4,
+   "scoreType": 15,
+   "ambientEnum": 10,
+   "ambientName": "IslandDiscountBoard",
+   "meaning": "Storm Island bonus (upgrade) boards smashed",
+   "max": 25,
+   "maxSource": "MaxAchievable/UpgradeBoards",
+   "matchingProfileStat": "MiscStats/UpgradesBoardsSmashed",
+   "better": "higher",
+   "observed": {
+    "hardcoreMax": null,
+    "noobMax": 13,
+    "withinMax": true
+   }
+  }
+ ],
+ "explain_4_7_331": "4/7 is PhotoChallenge = Horizon Promo car models photographed, not bonus boards. 331 is within the car catalog (354) and plausible for a long-played profile; not evidence of tampering by itself. 4 on Hardcore is a young profile.",
+ "hardcoreBounds": {
+  "4/9": 150,
+  "4/12": 55,
+  "4/8": 10,
+  "4/10": 315,
+  "4/7": 354,
+  "4/11": null,
+  "4/13": null,
+  "4/14": 50,
+  "4/15": 25
+ }
+}

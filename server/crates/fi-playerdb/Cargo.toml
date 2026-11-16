@@ -1,0 +1,24 @@
+# FH2 PlayerDatabase reader for the Hardcore conservation checks (OD-62 step 2, OD-67, ADR 0021): a
+# minimal pure-Rust, read-only reader of the few tables the server needs from the SQLite file
+# inside the save's `ssmc` container, with hard byte, page and row limits. Server only: fi-saves
+# builds into the launcher and does not depend on it. No C; no game data: the pinned DDL is the game
+# data file fh2/playerdb-schema.sql (FI_GAME_DATA_DIR, crate fi-gamedata), read once.
+[package]
+name = "fi-playerdb"
+version = "0.0.0"
+description = "ForzaInfinity FH2 PlayerDatabase reader: a bounded, read-only, pure-Rust reader of the save's SQLite tables the Hardcore guardrails need."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The game data directory (T-1115): the game's DDL of the pinned tables.
+fi-gamedata = { path = "../fi-gamedata" }
+
+[dev-dependencies]
+proptest = "=1.12.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

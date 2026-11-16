@@ -1,0 +1,49 @@
+# Server-side identity and token primitives of the account plane (ACCOUNTS.md §4, ADR 0006, ADR
+# 0901): Identity Platform ID-token verification, PASETO v4.public access tokens, launch tickets,
+# opaque tokens and codes, PKCE, peppered HMACs and the key rings. Pure (no I/O, no clock: callers
+# pass `now`), server-only: never a dependency of fi-protocol, fi-domain or fi-saves, so no crypto
+# reaches the launcher's Windows build through the shared crates.
+[package]
+name = "fi-auth"
+version = "0.0.0"
+description = "ForzaInfinity account-plane crypto: ID-token verification, PASETO v4.public, launch tickets, opaque tokens, PKCE, peppers."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Passwords of a `local` instance's built-in sign-in (OD-122): Argon2id, PHC strings. The salt
+# comes from `random_bytes`, so no getrandom feature of its own.
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "password-hash"] }
+# Firebase Authentication's modified scrypt (the import of OD-122's migration, `firebase_scrypt`):
+# scrypt, then AES-256-CTR over the project's signer key. Pure Rust, no default features.
+aes = { version = "=0.9.3", default-features = false }
+base64 = "=0.22.1"
+ctr = { version = "=0.10.1", default-features = false }
+# Wire instants in token claims and the launch ticket's wire form (a leaf: serde only).
+fi-protocol = { path = "../fi-protocol" }
+# Same version as the launcher (fi-launcher-core), which verifies the launch tickets signed here.
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.4.3"
+hmac = "=0.13.0"
+# RS256 for Identity Platform ID tokens. Pure-Rust backend only: the default aws-lc-rs backend needs
+# cmake and nasm, which the slim build image does not have (`cargo tree -p fi-auth` must show no
+# aws-lc or openssl).
+jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["rust_crypto"] }
+scrypt = { version = "=0.12.0", default-features = false }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+# Beta stored SHA-1(site key); the legacy link recomputes it under the pepper (ACCOUNTS.md §10).
+sha1 = "=0.11.0"
+sha2 = "=0.11.1"
+subtle = "=2.6.1"
+thiserror = "=2.0.21"
+
+[dev-dependencies]
+# Test-only RSA keys (generated in code: no key files, .gitignore drops *.pem and *.key).
+rsa = { version = "=0.9.10", features = ["getrandom"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

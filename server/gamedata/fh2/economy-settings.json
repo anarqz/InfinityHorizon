@@ -1,0 +1,13 @@
+{
+ "creditDestinationBonus": 30000,
+ "creditDestinationFalloff": 2000,
+ "creditPerKm": 960,
+ "enableTokens": false,
+ "enableXboxMusic": false,
+ "minimumFinishLineXp": 0,
+ "promoBonusScale": 1.0,
+ "tombolaPrizeScale": 1.0,
+ "wagerRaceCost": 0,
+ "xpPerKmOffline": 800,
+ "xpPerKmOnline": 640
+}

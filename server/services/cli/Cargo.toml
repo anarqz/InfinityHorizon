@@ -1,0 +1,39 @@
+# fi-cli: one CLI binary for every Cloud Run job and the compose init service (ADR 0002 §3):
+# migrations and login roles, nightly consolidation, save retention, erasure and the Beta import.
+[package]
+name = "fi-cli"
+version = "0.0.0"
+description = "ForzaInfinity jobs CLI (Cloud Run jobs, compose init): migrate, db-check, nightly consolidation, save retention, erasure, Beta import."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fi-db = { path = "../../crates/fi-db" }
+fi-domain = { path = "../../crates/fi-domain" }
+fi-protocol = { path = "../../crates/fi-protocol" }
+# saves-audit (OD-67, ADR 0021): the catalog, the parts shop's prices (feature `parts`), the rules
+# and the PlayerDatabase reader.
+fi-gamedb = { path = "../../crates/fi-gamedb", features = ["parts"] }
+fi-playerdb = { path = "../../crates/fi-playerdb" }
+fi-runtime = { path = "../../crates/fi-runtime" }
+# worlds-ceiling (CR-S100): the owner's alert mail through the jobs' SMTP settings (OD-203).
+fi-mail = { path = "../../crates/fi-mail" }
+# seed-import (OD-60): bundle verification and the synthetic starter, the save bucket.
+fi-saves = { path = "../../crates/fi-saves" }
+fi-storage = { path = "../../crates/fi-storage" }
+# dashboard-snapshot (DASHBOARD_API.md section 5, OD-173): the live dashboard routes' reads and
+# assembly, so a snapshot file is exactly what the internal API answers.
+fi-surfaces = { path = "../../crates/fi-surfaces" }
+serde = "=1.0.229"
+# dashboard-snapshot's one REPEATABLE READ READ ONLY transaction (the features come from fi-db).
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }
+serde_json = "=1.0.154"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "time", "process"] }
+tracing = "=0.1.44"
+# cheat-unflag: the profile id.
+uuid = "=1.28.0"
+
+[lints.rust]
+unsafe_code = "forbid"

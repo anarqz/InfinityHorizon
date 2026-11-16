@@ -1,0 +1,5 @@
+# The one Rust toolchain of the server: every build uses exactly this compiler.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
