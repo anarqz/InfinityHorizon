@@ -261,15 +261,40 @@ fn own_attempt(reply: &[u8]) -> u32 {
 
 // ---- Codec ----
 
-/// deprecated/beta/dedicated/src/nerd.rs `open_connection_matches_capture`: FH2's real bytes.
+/// An OpenConnection written out by hand from its layout, independently of `Writer`: the header
+/// (ident, ack, ackbits, count, size, little-endian), then the body's bits low bit first: a 7-bit
+/// id, two compact-length strings (u2 size 0, u6 length, the bytes), u2, u64 user, three u32.
+fn open_connection_by_hand(version: &[u8]) -> Vec<u8> {
+    let mut bits: Vec<bool> = Vec::new();
+    let mut put = |value: u64, count: usize| bits.extend((0..count).map(|i| value >> i & 1 == 1));
+    put(u64::from(nerd::OPEN_CONNECTION), 7);
+    for text in [version, nerd::GAME] {
+        put(0, 2);
+        put(text.len() as u64, 6);
+        for b in text {
+            put(u64::from(*b), 8);
+        }
+    }
+    for (value, count) in [(0, 2), (0, 64), (0, 32), (0, 32), (0, 32)] {
+        put(value, count);
+    }
+    let body: Vec<u8> = bits
+        .chunks(8)
+        .map(|c| (0..c.len()).fold(0u8, |v, i| v | (u8::from(c[i]) << i)))
+        .collect();
+    let mut out = vec![0x00, 0x00, 0xfe, 0xff, 0, 0, 0, 0, 0x01];
+    out.extend_from_slice(&u16::try_from(11 + body.len()).unwrap().to_le_bytes());
+    out.extend(body);
+    out
+}
+
+/// Synthetic bytes only (absolute rule 3): the version string is made up, the layout is the one
+/// the game's own OpenConnection uses.
 #[test]
-fn matches_fh2s_captured_open_connection() {
-    let data = packet(vec![open_connection(b"6CC152FD", 0, 0, 7)], 0);
-    let captured = [
-        0x00, 0x00, 0xfe, 0xff, 0, 0, 0, 0, 0x01, 0x33, 0x00, 0x00, 0x10, 0x9b, 0xa1, 0xa1, 0x98,
-        0x1a, 0x19, 0x23, 0x22, 0x10, 0x23, 0xb6, 0xb0, 0xb3, 0x39, 0xb4, 0x34, 0x38,
-    ];
-    assert_eq!(&data[..30], &captured);
+fn open_connection_matches_its_layout() {
+    let version = b"0123ABCD";
+    let data = packet(vec![open_connection(version, 0, 0, 7)], 0);
+    assert_eq!(data, open_connection_by_hand(version));
     assert_eq!(data.len(), 51);
 }
 
