@@ -1,0 +1,24 @@
+--- a/shared/extra_options.h
++++ b/shared/extra_options.h
+@@ -6,7 +6,10 @@
+ #include <windows.h>
+ 
+ #define MOD_NAME "Forza Horizon 2 Extra Options"
+-#define MOD_VERSION "0.6.0"
++/* ExtraOptions.Infinity: the 0.6.1 release (Azimuth_v1.0.4) was built from main with this bump left
++   uncommitted; the pinned main still says 0.6.0. The version resource, the REFUSED text and the
++   hook's ExtraOptions gate (FI_EO_SUPPORTED) follow it. Drop this patch once upstream commits it. */
++#define MOD_VERSION "0.6.1"
+ #define MOD_INI_NAME L"FH2_ExtraOptions.ini"
+ #define MOD_LOG_NAME L"FH2_ExtraOptions.log"
+ #define GAME_EXE_NAME L"forza_durango_release_final.exe"
+--- a/fh2/patches.json
++++ b/fh2/patches.json
+@@ -1,6 +1,6 @@
+ {
+   "schema": 1,
+-  "version": "0.6.0",
++  "version": "0.6.1",
+   "filename": "forza_durango_release_final.exe",
+   "size": 58204160,
+   "original_sha256": "3ec04c6163fb5614e3d351ba0570d39b846041a257715d6340eceb03ccb7f0a3",
