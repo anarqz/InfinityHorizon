@@ -1,0 +1,5 @@
+# Your settings and the extractor's Python environment never go into git; the example does.
+.env
+.env.*
+!.env.example
+.venv/

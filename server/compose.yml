@@ -1,0 +1,273 @@
+# A complete Infinity Horizon server on one machine: one `fi-platform` process serving every API
+# (FI_SURFACES=all), Postgres, the scheduled jobs, the built-in e-mail and password sign-in
+# (FI_AUTH_BACKEND=local), save files in a volume (FI_BLOB_BACKEND=fs) and a world node
+# (`worlds agent`, the lobby and free-roam engine of ../native/worlds). Every key is generated on
+# the first start and kept in the `keys` volume; nothing secret is a default here. README.md is
+# the guide.
+#
+#   cp .env.example .env     # then set your LAN address (README "Configure")
+#   docker compose up -d --wait
+#
+# Settings come from .env (every one a server operator may change, with its default, is in
+# .env.example); the non-secret defaults are the ENV lines of docker/platform.Dockerfile. Plain
+# HTTP, bound to 127.0.0.1 by default: put a TLS reverse proxy in front before exposing it beyond
+# a network you trust.
+
+name: infinity-horizon
+
+x-platform-env: &platform-env
+  # Secrets not given in .env are read from <FI_KEYS_DIR>/<VARIABLE> (`fi-platform keys init`).
+  FI_KEYS_DIR: /keys
+  # The database URL is composed from these and the login's password file (no URL in the keys).
+  FI_DB_HOST: postgres
+  FI_DB_PORT: '5432'
+  FI_DB_NAME: forza_infinity
+  # The gate's internal pool listing stays closed: nothing in a single-machine server calls it.
+  FI_GATE_INTERNAL: 'off'
+  # One origin serves every API: launchers are told this one.
+  FI_PUBLIC_CORE_URL: ${FI_PUBLIC_URL:-http://127.0.0.1:8080}
+  FI_PUBLIC_GATE_URL: ${FI_PUBLIC_URL:-http://127.0.0.1:8080}
+  FI_PUBLIC_SAVES_URL: ${FI_PUBLIC_URL:-http://127.0.0.1:8080}
+  FI_PUBLIC_MATCHMAKING_URL: ${FI_PUBLIC_URL:-http://127.0.0.1:8080}
+  # The two pools, whose game requests reach this same origin. `migrate` writes the rows; the API
+  # reads instanceCapacity from it.
+  FI_POOLS_JSON: '[{"name":"vip","tier":"vip","capacity":${FI_SUPPORTER_CAPACITY:-8},"queueLimit":100,"instanceCapacity":4,"gameEndpoint":"${FI_PUBLIC_URL:-http://127.0.0.1:8080}"},{"name":"matchmaking","tier":"free","capacity":${FI_FREE_CAPACITY:-16},"queueLimit":100,"instanceCapacity":4,"gameEndpoint":"${FI_PUBLIC_URL:-http://127.0.0.1:8080}"}]'
+
+x-platform: &platform
+  image: infinity-horizon-server:selfhost
+  pull_policy: never
+  env_file:
+    - path: .env
+      required: false
+
+services:
+  # One-shot on every `up`: writes the secrets that do not exist yet (mode 0600) and keeps every
+  # existing one, so restarts and upgrades never change a key.
+  keys:
+    <<: *platform
+    build:
+      # This folder: the server's Cargo workspace (docker/platform.Dockerfile.dockerignore keeps the
+      # build context to Cargo.toml, Cargo.lock, crates/ and services/).
+      context: .
+      dockerfile: docker/platform.Dockerfile
+    # Always built here, never pulled; cached after the first build.
+    pull_policy: build
+    command: [keys, init, --dir, /keys]
+    volumes:
+      - keys:/keys
+    restart: 'no'
+
+  postgres:
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    # The entrypoint starts as root: it copies the two passwords it needs out of the keys volume
+    # (0600, owned by the server image's nonroot user) for the postgres user, then runs the image's
+    # own entrypoint, which drops to postgres.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        install -d -o postgres -g postgres -m 0700 /run/fi-keys &&
+        install -o postgres -g postgres -m 0400 /keys/POSTGRES_PASSWORD /keys/FI_MIGRATOR_PASSWORD /run/fi-keys/ &&
+        exec docker-entrypoint.sh postgres
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/fi-keys/POSTGRES_PASSWORD
+      # ICU collation (the alpine image's musl collates by code point).
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=icu --icu-locale=en-US
+    # No host port: only the server's containers reach the database.
+    volumes:
+      # PostgreSQL 18 keeps PGDATA under /var/lib/postgresql/18/docker; mounting the parent lets a
+      # future major upgrade run pg_upgrade --link inside the same volume.
+      - pgdata:/var/lib/postgresql
+      - keys:/keys:ro
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP: while initdb scripts run, the image serves a socket-only temporary server.
+      test: [CMD, pg_isready, --host=127.0.0.1, --port=5432, --dbname=forza_infinity, --username=fi_migrator]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    depends_on:
+      keys:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # One-shot on every `up`: migrations, the runtime logins and the pools, as the migrator.
+  migrate:
+    <<: *platform
+    command: [migrate]
+    environment:
+      <<: *platform-env
+    volumes:
+      - keys:/keys:ro
+    depends_on:
+      keys:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  # The API: every surface on one port (fi_app login).
+  api:
+    <<: *platform
+    command: [serve]
+    environment:
+      <<: *platform-env
+      FI_DB_USER: fi_app
+      # The game data directory you built from your own install (README "Game data"), read-only.
+      FI_GAME_DATA_DIR: /gamedata
+      # A custom server publishes its launch-ticket and relay-grant public keys in /info, read
+      # from the keys volume, so launchers can pin them.
+      FI_PUBLISH_TRUST_KEYS: 'true'
+      # Read only with FI_CLIENT_ADDRESS=trusted-proxy (.env; the image's default is `peer`): the
+      # `cloudflared` container's fixed address below, the one peer allowed to report a player's
+      # address (CF-Connecting-IP). Not the whole subnet: Docker may hand published-port traffic
+      # to the container from the network's gateway (.1), which would then be trusted too.
+      FI_TRUSTED_PROXIES: ${FI_TRUSTED_PROXIES:-172.30.122.10/32}
+    networks:
+      default:
+      pinned:
+        # The world node's FI_WORLDS_SERVER_URL below: the agent accepts plain http only for an
+        # IP literal in a private range (or localhost), never a container name.
+        ipv4_address: 172.30.122.20
+    volumes:
+      - keys:/keys:ro
+      - blobs:/data/blobs
+      - ${FI_GAME_DATA_PATH:-./gamedata}:/gamedata:ro
+    ports:
+      - ${FI_BIND_ADDRESS:-127.0.0.1}:${FI_HTTP_PORT:-8080}:8080
+    healthcheck:
+      # Distroless: no shell or curl; the binary probes its own /health/ready.
+      test: [CMD, /usr/local/bin/fi-platform, healthcheck]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # The scheduled jobs (`fi-cli schedule`: gate-sweep every minute, freeroam-purge and saves-audit
+  # hourly, consolidate-nightly, account-erasure, the retention jobs and saves-gc daily) as fi_jobs.
+  # The blobs volume is writable here only for saves-gc, which deletes unreferenced save files.
+  jobs:
+    <<: *platform
+    entrypoint: [/usr/local/bin/fi-cli]
+    command: [schedule]
+    environment:
+      <<: *platform-env
+      FI_DB_USER: fi_jobs
+      FI_GAME_DATA_DIR: /gamedata
+    volumes:
+      - keys:/keys:ro
+      - blobs:/data/blobs
+      - ${FI_GAME_DATA_PATH:-./gamedata}:/gamedata:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # The world node: `worlds agent` supervises its own world engine (lobbies, free roam, car meets;
+  # Road Trip with the catalog below) and registers with the api over the signed /mm/v1/official
+  # routes. Players reach the engine directly on UDP FI_WORLDS_PORT. Its node key is generated once
+  # into the `worlds-key` volume and its public half is logged as `agent.started {publicKey}`: put
+  # it in .env's FI_WORLDS and restart the api (README "World node"). Until then the agent retries
+  # its hello every minute at most. Linux container only (the agent does not run on Windows).
+  worlds:
+    build:
+      # The client repository's root: docker/worlds.Dockerfile.dockerignore keeps the context to
+      # native/worlds' Cargo.toml, Cargo.lock and src/.
+      context: ..
+      dockerfile: server/docker/worlds.Dockerfile
+    image: infinity-horizon-worlds:selfhost
+    pull_policy: build
+    # Only these settings: no env_file, so none of the api's settings or secrets reach it.
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      FI_WORLDS_SERVER_URL: http://172.30.122.20:8080
+      FI_WORLDS_VM_ID: ${FI_WORLDS_VM_ID:-home-1}
+      FI_WORLDS_KEY_FILE: /var/lib/worlds/node.key
+      FI_WORLDS_BIND: 0.0.0.0:5102
+      FI_WORLDS_MAX_WORLDS: ${FI_WORLDS_MAX_WORLDS:-8}
+      # A short announce period admits a placed player within seconds (the server allows one
+      # every 3 s).
+      FI_WORLDS_ANNOUNCE_SECONDS: '3'
+      # Optional: /catalog/gamedbRC.slt with FI_WORLDS_CATALOG_DIR pointing at your install's
+      # media/stripped folder (Road Trip worlds and the Hardcore parts rule). Empty: no catalog.
+      FI_WORLDS_CATALOG: ${FI_WORLDS_CATALOG:-}
+    networks:
+      pinned:
+    volumes:
+      - worlds-key:/var/lib/worlds
+      - ${FI_WORLDS_CATALOG_DIR:-./gamedata}:/catalog:ro
+    ports:
+      - ${FI_BIND_ADDRESS:-127.0.0.1}:${FI_WORLDS_PORT:-5102}:5102/udp
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  # Profile `relay`: the UDP relay (binding answers and the capped fallback for players who cannot
+  # reach each other directly), verifying grants with the public ring from the keys volume. Not
+  # needed for the world node, whose players connect to it directly.
+  relay:
+    profiles: [relay]
+    build:
+      context: .
+      dockerfile: docker/relay.Dockerfile
+    image: infinity-horizon-relay:selfhost
+    pull_policy: build
+    environment:
+      FI_KEYS_DIR: /keys
+      RUST_LOG: ${RUST_LOG:-info}
+      FI_RELAY_FALLBACK: 'true'
+      FI_RELAY_MAX_PEERS: '24'
+    volumes:
+      - keys:/keys:ro
+    ports:
+      - ${FI_BIND_ADDRESS:-127.0.0.1}:${FI_RELAY_BINDING_PORT:-3478}:3478/udp
+      - ${FI_BIND_ADDRESS:-127.0.0.1}:${FI_RELAY_PORT:-5101}:5101/udp
+    depends_on:
+      keys:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Profile `tunnel`: a Cloudflare Tunnel of your own (`docker compose --profile tunnel up -d`;
+  # README "Publishing beyond your LAN"). Outbound only, no host port; the tunnel's public hostname
+  # must point at http://api:8080 in the Cloudflare dashboard. The token comes from .env.
+  cloudflared:
+    profiles: [tunnel]
+    image: cloudflare/cloudflared:2026.9.0@sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9
+    command: [tunnel, --no-autoupdate, run]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks:
+      pinned:
+        # FI_TRUSTED_PROXIES' default: keep both in step if you change the subnet below.
+        ipv4_address: 172.30.122.10
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+  # A pinned subnet, so the api's and the tunnel's addresses are known. If it clashes with a
+  # network of the host, change it together with the api's and cloudflared's ipv4_address, the
+  # world node's FI_WORLDS_SERVER_URL and FI_TRUSTED_PROXIES' default.
+  pinned:
+    ipam:
+      config:
+        - subnet: 172.30.122.0/24
+
+volumes:
+  # Generated secrets: back them up with the database. They hold the database passwords too, so
+  # restoring the database without them locks the server out of it (README "Backup").
+  keys:
+  pgdata:
+  blobs:
+  # The world node's identity (its public half is in the api's FI_WORLDS).
+  worlds-key:
