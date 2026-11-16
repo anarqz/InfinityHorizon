@@ -63,7 +63,7 @@ public sealed partial class ShellViewModel : INotifyPropertyChanged, IDisposable
 
     public string Version { get; }
 
-    public string VersionLabel => "v" + Version + " · BETA";
+    public string VersionLabel => "v" + Version;
 
     public int SidebarWidth => InShell ? 220 : 0;
 
