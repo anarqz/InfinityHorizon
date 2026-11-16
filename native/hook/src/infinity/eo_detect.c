@@ -29,6 +29,8 @@
 #define EO_SUPPORTED_LS FI_EO_SUPPORTED_LS
 #define EO_SUPPORTED FI_EO_SUPPORTED
 #define EO_NAME FI_EO_NAME
+/* the label is copied whole into FiEo.version (fi_eo_detect) */
+_Static_assert(sizeof(EO_SUPPORTED) <= sizeof(((FiEo *)0)->version), "FI_EO_SUPPORTED fits FiEo.version");
 
 static FiEo eo_result;
 /* 0 not looked at yet, 1 looking, 2 known */

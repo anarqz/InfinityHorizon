@@ -7,7 +7,7 @@
 -#define MOD_VERSION "0.6.0"
 +/* ExtraOptions.Infinity: the 0.6.1 release (Azimuth_v1.0.4) was built from main with this bump left
 +   uncommitted; the pinned main still says 0.6.0. The version resource, the REFUSED text and the
-+   hook's ExtraOptions gate (FI_EO_SUPPORTED) follow it. Drop this patch once upstream commits it. */
++   hook's ExtraOptions gate (FI_EO_SUPPORTED_MS/LS) follow it. Drop this patch once upstream commits it. */
 +#define MOD_VERSION "0.6.1"
  #define MOD_INI_NAME L"FH2_ExtraOptions.ini"
  #define MOD_LOG_NAME L"FH2_ExtraOptions.log"
