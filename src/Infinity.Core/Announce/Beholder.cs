@@ -153,7 +153,7 @@ public sealed class BeholderClient(HttpClient http, Uri announcer)
 /// </summary>
 public static class OfficialNodes
 {
-    /// <summary>"Infinity Beta" (the owner's server behind https://play.infinity-horizon.com).</summary>
+    /// <summary>"Infinity Horizon" (the owner's server behind https://play.infinity-horizon.com).</summary>
     public static IReadOnlySet<string> Servers { get; } = new HashSet<string>(StringComparer.Ordinal) { "n/JK6+KV3riBQMvX4LzQwUpW6hUxF0jNG+pEmsJN6Nw=" };
 
     public static bool IsOfficialServer(Listing server) => Servers.Contains(server.PublicKey);
