@@ -30,7 +30,10 @@ public static class OfficialModCatalog
     /// <summary>OD-166: the official catalog is <c>catalog.json</c> on InfinityMods' <c>main</c>.</summary>
     public static Uri OfficialUrl { get; } = new("https://raw.githubusercontent.com/anarqz/InfinityMods/main/catalog.json");
 
-    /// <summary>OD-166: the former official address (the launcher repository's <c>mods/catalog.json</c>), read when the official one fails, for one release.</summary>
+    /// <summary>
+    /// OD-166: the former official address (the launcher repository's <c>mods/catalog.json</c>, removed in T-1115). Never fetched; a
+    /// setting that still holds it counts as the official catalog, so it reads <see cref="OfficialUrl"/>.
+    /// </summary>
     public static Uri LegacyOfficialUrl { get; } = new($"https://raw.githubusercontent.com/{Update.GitHubReleases.Repository}/main/mods/catalog.json");
 
     /// <summary>The official address, or the former one (any other is a player-chosen, unofficial catalog).</summary>
@@ -153,25 +156,15 @@ public static class OfficialModCatalog
     }
 
     /// <summary>
-    /// Fetches the catalog (any HTTPS host: the pinned hashes are the check), parses it and caches it for offline listing. For the
-    /// official address, a failed fetch or a refused catalog tries <see cref="LegacyOfficialUrl"/> before failing (OD-166, one release);
-    /// either way the result is cached as the official catalog.
+    /// Fetches the catalog (any HTTPS host: the pinned hashes are the check), parses it and caches it for offline listing. The former
+    /// official address reads the official one (T-1115: InfinityMods' catalog is the only official catalog).
     /// </summary>
     public static async Task<ModCatalog> LoadAsync(HttpClient http, Uri url, string cacheDirectory, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(http); ArgumentNullException.ThrowIfNull(url);
-        byte[] raw; ModCatalog catalog;
-        try
-        {
-            raw = await FetchAsync(http, url, cancellation).ConfigureAwait(false);
-            catalog = Build(url, raw, cached: false);
-        }
-        catch (Exception error) when (Same(url, OfficialUrl) && !cancellation.IsCancellationRequested
-            && error is ModException or HttpRequestException or IOException or OperationCanceledException)
-        {
-            raw = await FetchAsync(http, LegacyOfficialUrl, cancellation).ConfigureAwait(false);
-            catalog = Build(url, raw, cached: false);
-        }
+        if (Same(url, LegacyOfficialUrl)) url = OfficialUrl;
+        var raw = await FetchAsync(http, url, cancellation).ConfigureAwait(false);
+        var catalog = Build(url, raw, cached: false);
         var path = CachePath(cacheDirectory, url);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var staging = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
