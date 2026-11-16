@@ -121,7 +121,9 @@ their content and, through its PluginLoader, their plugins; the launcher has no 
 
 Infinity Launcher is free software, licensed under the
 [GNU General Public License version 3](LICENSE) (GPL-3.0-only) with one additional term under its
-section 7(b), stated in [NOTICE](NOTICE).
+section 7(b), stated in [NOTICE](NOTICE). The `server/` folder is licensed separately under the
+GNU Affero General Public License version 3 (AGPL-3.0; see its own `server/LICENSE` and
+`server/NOTICE`); everything else stays GPL-3.0-only.
 
 **Forks and derived works must credit this project.** They must keep the following attribution,
 unaltered, in the legal notices their interface displays (its start screen, main window or an
