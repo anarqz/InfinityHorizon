@@ -21,10 +21,9 @@ public static class CustomServer
     /// <summary>
     /// The owner's custom servers, the only ones that may receive an ID token of <see cref="OfficialIdentityProject"/> (OD-122
     /// follow-up "official accounts only on the owner's custom servers"): any other custom server could present it to the official
-    /// server and enter that player's official account. OD122-L8: the live server moved off SAURON to the SteamOS notebook on the LAN
-    /// and its Cloudflare tunnel.
+    /// server and enter that player's official account. OD122-L8: the live server is reached only through its public origin.
     /// </summary>
-    public static IReadOnlyList<Uri> OfficialIdentityServers { get; } = [new("http://192.168.68.57:8080/"), new(OwnerPublicOrigin)];
+    public static IReadOnlyList<Uri> OfficialIdentityServers { get; } = [new(OwnerPublicOrigin)];
 
     /// <summary>
     /// OD122-L8: the owner's own server behind its Cloudflare tunnel, the one host under <c>infinity-horizon.com</c> that is a custom
