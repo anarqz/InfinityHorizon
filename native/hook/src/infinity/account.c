@@ -765,7 +765,7 @@ static DWORD WINAPI account_thread(void *unused) {
         account_active = 1;
         /* the server's word for the player, in their language (a moderation reset: db/reset.rs) */
         if (json_string(reply, "notice", text, sizeof(text)) && text[0]) {
-            log_append("ACCOUNT: legacy server notice received; no overlay in a Beta session.\r\n");
+            log_append("ACCOUNT: legacy server notice received; no overlay without the launcher.\r\n");
         }
         InterlockedExchange(&account_link, 1);
         /* OD-140: every profile's cloud save starts; the server decides what it keeps */
