@@ -926,7 +926,7 @@ mod tests {
             "http://10.1.2.3",
             "http://172.16.0.1:80",
             "http://172.31.255.255",
-            "http://192.168.68.53:8480",
+            "http://192.168.0.10:8480",
             "https://mm.example.test:443",
             "https://[2001:db8::1]:8443",
             "https://203.0.113.7",
@@ -934,14 +934,15 @@ mod tests {
             assert!(server_url(ok).is_some(), "{ok}");
         }
         assert_eq!(
-            server_url("http://192.168.68.53:8480/").unwrap(),
+            server_url("http://192.168.0.10:8480/").unwrap(),
             ServerUrl {
-                base: "http://192.168.68.53:8480".into(),
+                base: "http://192.168.0.10:8480".into(),
                 https: false
             }
         );
         for bad in [
             "http://192.169.0.1",
+            "http://192.0.2.10",
             "http://[fd00::1]",
             "http://example.test",
             "https://exa mple.test",
