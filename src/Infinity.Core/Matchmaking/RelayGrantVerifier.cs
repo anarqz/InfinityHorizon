@@ -208,9 +208,9 @@ public static class RelayGrantVerifier
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectNullableAnnotations = true,
         AllowDuplicateProperties = false,
-        MaxDepth = 4,
+        MaxDepth = 64, // deep enough that a non-flat sync reads as empty (SyncIdsConverter) instead of refusing the grant
     };
-    private static readonly JsonDocumentOptions KidJson = new() { AllowDuplicateProperties = false, MaxDepth = 4 };
+    private static readonly JsonDocumentOptions KidJson = new() { AllowDuplicateProperties = false, MaxDepth = 64 };
 
     public static RelayGrantClaims Verify(RelayGrant grant, RelayGrantVerifyKeys keys, long nowUnix, RelayGrantContext context)
     {
