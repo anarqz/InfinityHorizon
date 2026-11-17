@@ -247,7 +247,7 @@ add), and `keys` adds any secret a newer release introduces without touching the
 a release adds a game-data file, run the extractor again (section 2); the server names a missing
 file when it refuses to start.
 
-If your database was first migrated by a server older than commit f026266 (2026-11-16), the new
+If your database was migrated from a checkout older than the 2026-11-16 history rewrite, the new
 `api` fails readiness on two migrations whose header comment was reworded (20261030170000 and
 20261031120000; the SQL is unchanged). Update their recorded checksums once, after the backup and
 before `docker compose up`:
