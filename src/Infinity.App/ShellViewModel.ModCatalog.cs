@@ -461,7 +461,9 @@ public sealed partial class ShellViewModel
         {
             Log("mods: catalog unavailable: " + ErrorChain(error) + (error is ModException mod ? " " + mod.Code : ""));
             _catalogFailure = CatalogFailureText;
-            if (!_catalogLoaded) _ = RetryCatalogOnceAsync(); // T1f: a first-start fetch failure (seen under Proton) gets one more try
+            // T-1117: a detail older than its index (the CDN's copy) clears by itself in minutes: a later quiet try, even over the cached catalog
+            if (error is CatalogDetailStaleException) _ = RetryStaleCatalogAsync();
+            else if (!_catalogLoaded) _ = RetryCatalogOnceAsync(); // T1f: a first-start fetch failure (seen under Proton) gets one more try
         }
         finally { _catalogLoading = false; Changed(string.Empty); }
         // OD-233: with the catalog, an unmanaged folder's game is known: the per-game move runs now (receipts decide first)
@@ -480,6 +482,33 @@ public sealed partial class ShellViewModel
         catch (OperationCanceledException) { return; }
         if (_catalogLoaded || Playing || !ModsIdle) return;
         Log("mods: retrying the catalog once");
+        await LoadModCatalogQuietlyAsync();
+    }
+
+    private int _staleCatalogRetries;
+    private bool _staleCatalogRetryPending;
+
+    /// <summary>How long a stale detail waits for its retry: raw.githubusercontent.com keeps a copy for about five minutes.</summary>
+    internal TimeSpan StaleCatalogRetryDelay { get; set; } = TimeSpan.FromMinutes(6);
+
+    /// <summary>
+    /// T-1117: a detail file that differs from its pin (most likely the CDN's copy older than the index) gets a quiet retry once its copy
+    /// expired; at most three a run, then the ↻ button. The cached catalog stays shown meanwhile; the reason is in the log.
+    /// </summary>
+    private async Task RetryStaleCatalogAsync()
+    {
+        if (_staleCatalogRetryPending || _staleCatalogRetries >= 3) return;
+        _staleCatalogRetryPending = true;
+        try
+        {
+            await Task.Delay(StaleCatalogRetryDelay, _updateStop.Token);
+            // a game session or a mod operation: wait for it (not counted), never drop the retry
+            while (Playing || !ModsIdle || _catalogLoading) await Task.Delay(StaleCatalogRetryDelay, _updateStop.Token);
+        }
+        catch (OperationCanceledException) { return; }
+        finally { _staleCatalogRetryPending = false; }
+        _staleCatalogRetries++;
+        Log("mods: retrying the catalog after a stale detail (" + _staleCatalogRetries + " of 3)");
         await LoadModCatalogQuietlyAsync();
     }
 
@@ -506,7 +535,7 @@ public sealed partial class ShellViewModel
     }
 
 
-    /// <summary>OD-116: the player's catalog ("Use a different catalog"), else the official file on InfinityMods' main (OD-166).</summary>
+    /// <summary>OD-116: the player's catalog ("Use a different catalog"), else the official index on InfinityMods' main (OD-166, T-1117).</summary>
     private Uri CatalogUri => CustomCatalog ?? OfficialModCatalog.OfficialUrl;
     private string CatalogCache => Path.Combine(_stateDirectory, "mod-catalog-v2");
 
@@ -515,7 +544,8 @@ public sealed partial class ShellViewModel
 
     private async Task FetchCatalogAsync()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // T-1117: a first schema-3 load fetches every detail (8 at a time); the ones fetched stay cached if it still times out
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         ModCatalog catalog;
         if (CatalogFetchForTests is { } fake) catalog = await fake(timeout.Token);
         else if (DevelopmentMods)

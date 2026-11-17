@@ -21,14 +21,24 @@ public sealed record CatalogDownload(Uri Url, string Sha256, long Bytes);
 /// manifest from both, so every rule of <see cref="ModManifest"/> still applies: OD-232's ExtraOptions mods only. An entry in a
 /// retired format, the former <c>infinity-mod-runtime</c> entry or a <c>requires</c> refuses the catalog, like any invalid entry.
 /// </para>
+/// <para>
+/// Schema 3 (T-1117, OfficialModCatalog.Index.cs): an index of card details that pins one detail file per mod; the official catalog
+/// is that index. A custom catalog is either, told apart by its <c>schemaVersion</c>.
+/// </para>
 /// </summary>
-public static class OfficialModCatalog
+public static partial class OfficialModCatalog
 {
     public const int SchemaVersion = 2;
     public const int MaxCatalogBytes = 1024 * 1024;
     public const long MaxDownloadBytes = 64L * 1024 * 1024;
-    /// <summary>OD-166: the official catalog is <c>catalog.json</c> on InfinityMods' <c>main</c>.</summary>
-    public static Uri OfficialUrl { get; } = new("https://raw.githubusercontent.com/anarqz/InfinityMods/main/catalog.json");
+    /// <summary>T-1117: the official catalog is the schema-3 index <c>catalog/index.json</c> on InfinityMods' <c>main</c>.</summary>
+    public static Uri OfficialUrl { get; } = new("https://raw.githubusercontent.com/anarqz/InfinityMods/main/catalog/index.json");
+
+    /// <summary>
+    /// OD-166: the official schema-2 file until 3.1.6. Never fetched (no fallback to it, OD-144); a setting that still holds it counts as
+    /// the official catalog, so it reads <see cref="OfficialUrl"/>.
+    /// </summary>
+    public static Uri FormerOfficialUrl { get; } = new("https://raw.githubusercontent.com/anarqz/InfinityMods/main/catalog.json");
 
     /// <summary>
     /// OD-166: the former official address (the launcher repository's <c>mods/catalog.json</c>, removed in T-1115). Never fetched; a
@@ -36,8 +46,11 @@ public static class OfficialModCatalog
     /// </summary>
     public static Uri LegacyOfficialUrl { get; } = new($"https://raw.githubusercontent.com/{Update.GitHubReleases.Repository}/main/mods/catalog.json");
 
-    /// <summary>The official address, or the former one (any other is a player-chosen, unofficial catalog).</summary>
-    public static bool IsOfficial(Uri url) => Same(url, OfficialUrl) || Same(url, LegacyOfficialUrl);
+    /// <summary>The official address, or a former one (any other is a player-chosen, unofficial catalog).</summary>
+    public static bool IsOfficial(Uri url) => Same(url, OfficialUrl) || Same(url, FormerOfficialUrl) || Same(url, LegacyOfficialUrl);
+
+    /// <summary>The address actually read: a former official address reads the official one.</summary>
+    private static Uri Canonical(Uri url) => IsOfficial(url) ? OfficialUrl : url;
 
     private static bool Same(Uri a, Uri b) => Uri.Compare(a, b, UriComponents.AbsoluteUri, UriFormat.UriEscaped, StringComparison.Ordinal) == 0;
 
@@ -67,21 +80,28 @@ public static class OfficialModCatalog
             {
                 var id = entry.GetProperty("id").GetString()!;
                 if (!ids.Add(id)) throw new ModException("duplicate catalog id", ModErrors.Catalog);
-                // OD-116 ("drop both"): no required mods and no availability, on any entry or inside its install;
-                // refused rather than silently ignored, so a catalog author never believes they take effect.
-                foreach (var dropped in DroppedFields)
-                    if (entry.TryGetProperty(dropped, out _) || entry.TryGetProperty("install", out var body) && body.ValueKind == JsonValueKind.Object && body.TryGetProperty(dropped, out _))
-                        throw new ModException("catalog v2 has no '" + dropped + "' (OD-116)", ModErrors.Catalog);
-                // OD-232: no native mod runtime to list or require (its former entry has no install, so it is refused below too).
-                if (entry.TryGetProperty("requires", out _)) throw new ModException("catalog v2 has no 'requires' (OD-232)", ModErrors.Catalog);
-                mods.Add(Manifest(entry));
+                mods.Add(EntryManifest(entry));
             }
             return mods.AsReadOnly();
         }
         // A bad entry (its manifest's own refusal included) is a bad catalog: the player sees one message for it.
-        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or ArgumentException
-            or ModException { Code: not ModErrors.Catalog })
-        { throw new ModException("invalid catalog: " + error.Message, ModErrors.Catalog); }
+        catch (Exception error) when (IsEntryError(error)) { throw new ModException("invalid catalog: " + error.Message, ModErrors.Catalog); }
+    }
+
+    private static bool IsEntryError(Exception error) => error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException
+        or ArgumentException or ModException { Code: not ModErrors.Catalog };
+
+    /// <summary>The rules of one schema-2 entry (a schema-3 index entry merged with its detail file is one too).</summary>
+    private static ModManifest EntryManifest(JsonElement entry)
+    {
+        // OD-116 ("drop both"): no required mods and no availability, on any entry or inside its install;
+        // refused rather than silently ignored, so a catalog author never believes they take effect.
+        foreach (var dropped in DroppedFields)
+            if (entry.TryGetProperty(dropped, out _) || entry.TryGetProperty("install", out var body) && body.ValueKind == JsonValueKind.Object && body.TryGetProperty(dropped, out _))
+                throw new ModException("catalog v2 has no '" + dropped + "' (OD-116)", ModErrors.Catalog);
+        // OD-232: no native mod runtime to list or require (its former entry has no install, so it is refused below too).
+        if (entry.TryGetProperty("requires", out _)) throw new ModException("catalog v2 has no 'requires' (OD-232)", ModErrors.Catalog);
+        return Manifest(entry);
     }
 
     /// <summary>One mod entry's manifest: the <c>install</c> body with the entry's details and downloads put back in place.</summary>
@@ -156,37 +176,71 @@ public static class OfficialModCatalog
     }
 
     /// <summary>
-    /// Fetches the catalog (any HTTPS host: the pinned hashes are the check), parses it and caches it for offline listing. The former
-    /// official address reads the official one (T-1115: InfinityMods' catalog is the only official catalog).
+    /// Fetches the catalog (any HTTPS host: the pinned hashes are the check), parses it and caches it for offline listing. A former
+    /// official address reads the official one (InfinityMods' index is the only official catalog). A schema-3 index also fetches the
+    /// detail files whose pin is not cached yet (<see cref="DetailConcurrency"/> at a time); a schema-2 file is the whole catalog.
     /// </summary>
     public static async Task<ModCatalog> LoadAsync(HttpClient http, Uri url, string cacheDirectory, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(http); ArgumentNullException.ThrowIfNull(url);
-        if (Same(url, LegacyOfficialUrl)) url = OfficialUrl;
-        var raw = await FetchAsync(http, url, cancellation).ConfigureAwait(false);
-        var catalog = Build(url, raw, cached: false);
+        url = Canonical(url);
+        var raw = await FetchAsync(http, url, MaxCatalogBytes, cancellation).ConfigureAwait(false);
         var path = CachePath(cacheDirectory, url);
+        ModCatalog catalog;
+        if (DeclaredSchema(raw) == IndexSchemaVersion)
+        {
+            var index = ParseIndex(raw, url, FollowsDownloadRules);
+            var details = DetailCache(cacheDirectory, url);
+            var mods = await DetailsAsync(index, details, (detail, token) => FetchAsync(http, detail, MaxDetailBytes, token), cancellation).ConfigureAwait(false);
+            catalog = Build(url, mods, cached: false);
+            // the details first: a cached index always has its pinned details next to it
+            await WriteAtomicAsync(path, raw, cancellation).ConfigureAwait(false);
+            PruneDetails(details, index);
+        }
+        else
+        {
+            catalog = Build(url, Parse(raw), cached: false);
+            await WriteAtomicAsync(path, raw, cancellation).ConfigureAwait(false);
+        }
+        return catalog;
+    }
+
+    private static async Task WriteAtomicAsync(string path, byte[] raw, CancellationToken cancellation)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var staging = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         await File.WriteAllBytesAsync(staging, raw, cancellation).ConfigureAwait(false);
         File.Move(staging, path, overwrite: true);
-        return catalog;
     }
 
-    private static async Task<byte[]> FetchAsync(HttpClient http, Uri url, CancellationToken cancellation)
+    private static async Task<byte[]> FetchAsync(HttpClient http, Uri url, int limit, CancellationToken cancellation)
     {
         using var response = await ModDownloads.DownloadAsync(http, url, _ => true, cancellation).ConfigureAwait(false);
         if (response.StatusCode != System.Net.HttpStatusCode.OK) throw new ModException("catalog unavailable: " + (int)response.StatusCode, ModErrors.Catalog);
         await using var body = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
-        try { return await DevelopmentModCatalog.ReadBoundedAsync(body, MaxCatalogBytes, cancellation).ConfigureAwait(false); }
+        try { return await DevelopmentModCatalog.ReadBoundedAsync(body, limit, cancellation).ConfigureAwait(false); }
         catch (ModException error) when (error.Code == ModErrors.Download) { throw new ModException("catalog too large", ModErrors.Catalog); }
     }
 
-    /// <summary>The last catalog fetched from <paramref name="url"/>, or null (none, or no longer readable).</summary>
+    /// <summary>The last catalog fetched from <paramref name="url"/>, or null (none, or no longer readable: a schema-3 index needs every detail it pins).</summary>
     public static ModCatalog? LoadCached(Uri url, string cacheDirectory)
     {
+        ArgumentNullException.ThrowIfNull(url);
+        url = Canonical(url);
         var path = CachePath(cacheDirectory, url);
-        try { return File.Exists(path) && new FileInfo(path).Length <= MaxCatalogBytes ? Build(url, File.ReadAllBytes(path), cached: true) : null; }
+        // the first offline start after 3.1.7: the official v2 file 3.1.6 cached (a local read only; the network reads the index alone)
+        if (!File.Exists(path) && Same(url, OfficialUrl) && File.Exists(CachePath(cacheDirectory, FormerOfficialUrl))) path = CachePath(cacheDirectory, FormerOfficialUrl);
+        try
+        {
+            if (!File.Exists(path) || new FileInfo(path).Length > MaxCatalogBytes) return null;
+            var raw = File.ReadAllBytes(path);
+            if (DeclaredSchema(raw) != IndexSchemaVersion) return Build(url, Parse(raw), cached: true);
+            var index = ParseIndex(raw, url, FollowsDownloadRules);
+            var details = DetailCache(cacheDirectory, url);
+            var mods = index.Select(entry => MergedManifest(entry, ReadCachedDetail(details, entry)
+                ?? throw new ModException("a pinned detail is not cached", ModErrors.Catalog))).ToArray();
+            return Build(url, mods, cached: true);
+        }
         catch (Exception error) when (error is ModException or IOException or UnauthorizedAccessException) { return null; }
     }
 
@@ -194,23 +248,30 @@ public static class OfficialModCatalog
     /// A schema-2 catalog read through the development route (<c>FI_DEV_MOD_CATALOG_URL</c>, development builds only): parsed by the same
     /// rules, never official or trusted, so a tester can load v2 from a local file without an HTTPS host.
     /// </summary>
-    public static ModCatalog Development(byte[] raw) => Build(new Uri("file:///development-catalog.json"), raw, cached: false);
+    public static ModCatalog Development(byte[] raw) => Build(DevelopmentUrl, Parse(raw), cached: false);
+
+    private static Uri DevelopmentUrl { get; } = new("file:///development-catalog.json");
 
     /// <summary>The bytes declare <c>schemaVersion</c> 2 (the development route tells v2 from the older development format).</summary>
-    public static bool IsSchema2(byte[] raw)
+    public static bool IsSchema2(byte[] raw) => DeclaredSchema(raw) == SchemaVersion;
+
+    /// <summary>The bytes declare <c>schemaVersion</c> 3: a catalog index (T-1117).</summary>
+    public static bool IsSchema3(byte[] raw) => DeclaredSchema(raw) == IndexSchemaVersion;
+
+    /// <summary>The root's integer <c>schemaVersion</c>, or null (not JSON, not an object, none).</summary>
+    private static int? DeclaredSchema(byte[] raw)
     {
         try
         {
             using var json = JsonDocument.Parse(raw, new JsonDocumentOptions { MaxDepth = 40 });
             return json.RootElement.ValueKind == JsonValueKind.Object && json.RootElement.TryGetProperty("schemaVersion", out var version)
-                && version.TryGetInt32(out var number) && number == SchemaVersion;
+                && version.TryGetInt32(out var number) ? number : null;
         }
-        catch (JsonException) { return false; }
+        catch (JsonException) { return null; }
     }
 
-    private static ModCatalog Build(Uri url, byte[] raw, bool cached)
+    private static ModCatalog Build(Uri url, IReadOnlyList<ModManifest> mods, bool cached)
     {
-        var mods = Parse(raw);
         var official = IsOfficial(url);
         return new(official ? "infinity-official" : "unofficial", 0, null, null, [], mods, Trusted: official, Cached: cached)
         { AnyDownloadHost = true };

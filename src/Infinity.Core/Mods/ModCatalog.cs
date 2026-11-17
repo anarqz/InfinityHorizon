@@ -258,8 +258,14 @@ public static class DevelopmentModCatalog
     public static async Task<ModCatalog> LoadAsync(HttpClient http, Uri url, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(url);
-        var bytes = await ReadAsync(http, url, 256 * 1024, cancellation).ConfigureAwait(false);
+        // schema 2 and 3 allow the official catalog's 1 MiB (InfinityMods' v2 file is larger than the old format's 256 KiB)
+        var bytes = await ReadAsync(http, url, OfficialModCatalog.MaxCatalogBytes, cancellation).ConfigureAwait(false);
         if (OfficialModCatalog.IsSchema2(bytes)) return OfficialModCatalog.Development(bytes); // OD-116: v2 from a local file (development only)
+        // T-1117: a schema-3 index; a local index may pin local details, a remote one only remote ones (the same reads as the index)
+        if (OfficialModCatalog.IsSchema3(bytes))
+            return await OfficialModCatalog.DevelopmentAsync(url, bytes, detail => detail.IsFile ? url.IsFile && !detail.IsUnc : Readable(detail),
+                (detail, token) => ReadAsync(http, detail, OfficialModCatalog.MaxDetailBytes, token), cancellation).ConfigureAwait(false);
+        if (bytes.Length > 256 * 1024) throw new ModException("catalog too large", ModErrors.Catalog);
         var parsed = ModCatalogTrust.Parse(bytes, signed: false);
         if (parsed.Entries.Count > 64) throw new ModException("catalog too large", ModErrors.Catalog);
         var mods = new List<ModManifest>();
@@ -280,14 +286,17 @@ public static class DevelopmentModCatalog
             if (url.IsUnc || new FileInfo(url.LocalPath).Length > limit) throw new ModException("invalid local catalog file", ModErrors.Catalog);
             return await File.ReadAllBytesAsync(url.LocalPath, cancellation).ConfigureAwait(false);
         }
-        if (url.Scheme != "https" && !(url.Scheme == "http" && url.IsLoopback)
-            || url.UserInfo.Length > 0 || url.Fragment.Length > 0) throw new ModException("invalid catalog URL", ModErrors.Catalog);
+        if (!Readable(url)) throw new ModException("invalid catalog URL", ModErrors.Catalog);
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         if (response.RequestMessage?.RequestUri != url) throw new ModException("catalog redirects are not supported", ModErrors.Catalog);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
         return await ReadBoundedAsync(stream, limit, cancellation).ConfigureAwait(false);
     }
+
+    /// <summary>A remote development address: HTTPS, or HTTP on loopback; no credentials or fragment.</summary>
+    private static bool Readable(Uri url) => (url.Scheme == "https" || url.Scheme == "http" && url.IsLoopback)
+        && url.UserInfo.Length == 0 && url.Fragment.Length == 0;
 
     internal static async Task<byte[]> ReadBoundedAsync(Stream stream, long limit, CancellationToken cancellation)
     {
