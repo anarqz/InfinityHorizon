@@ -599,3 +599,108 @@ fn a_located_car_meet_and_a_free_roam_world_serve_only_their_own_lobby() {
     let r = call(&mut s, &mut io, 0, req);
     assert_eq!(r["error"]["field"], "carMeetLobby", "{r}");
 }
+
+/// A punch of J1 whose grant carries `extra` claims (CR-L53 `sync`).
+fn punch_with(grant: &str, extra: &str) -> Value {
+    let (c, s) = sign(&claims(grant, W1, &official_host(), extra));
+    json!({"grantId": grant, "xuid": J1.to_string(), "kicked": false, "transport": "direct",
+        "endpoint": {"ip": "192.0.2.20", "port": 3074},
+        "relay": {"claims": c, "signature": s,
+                  "udpProof": {"version": 1, "key": encode_base64(&PROOF_KEY)}}})
+}
+
+#[test]
+fn the_grants_sync_claim_is_a_canonical_id_list_or_absent() {
+    use super::grant::SyncSet;
+    let ctx = Context {
+        world: W1,
+        host_xuid: "official:sao-1",
+        peer_xuid: "1000000000000102",
+        role: "joiner",
+        grant: Some(G1),
+    };
+    let verify = |extra: &str| {
+        let (c, s) = sign(&claims(G1, W1, &official_host(), extra));
+        grant::verify(&c, &s, &ring(), NOW, ctx).map(|v| v.0.sync)
+    };
+    assert_eq!(verify(""), Ok(SyncSet::EMPTY), "absent: empty");
+    assert_eq!(verify(r#","sync":null"#), Ok(SyncSet::EMPTY));
+    assert_eq!(verify(r#","sync":[1,2]"#).unwrap().ids(), [1, 2]);
+    assert_eq!(verify(r#","sync":[255]"#).unwrap().ids(), [255]);
+    assert_eq!(
+        verify(r#","sync":[1,2,3,4,5,6,7,8]"#).unwrap().ids().len(),
+        8
+    );
+    // where the server puts it (after relay, before voiceBlockedUntil) reads the same
+    assert_eq!(
+        verify(r#","sync":[1],"voiceBlockedUntil":0"#)
+            .unwrap()
+            .ids(),
+        [1]
+    );
+    for bad in [
+        r#","sync":[2,1]"#,
+        r#","sync":[1,1]"#,
+        r#","sync":[0]"#,
+        r#","sync":[256]"#,
+        r#","sync":[-1]"#,
+        r#","sync":[1.0]"#,
+        r#","sync":["1"]"#,
+        r#","sync":1"#,
+        r#","sync":{"1":true}"#,
+        r#","sync":[1,2,3,4,5,6,7,8,9]"#,
+        r#","sync":[[1]]"#,
+    ] {
+        assert_eq!(verify(bad), Err(Failure::Invalid), "{bad}");
+    }
+}
+
+#[test]
+fn an_xuids_sync_set_is_what_all_its_grants_hold() {
+    use super::admission::{Gate, Rules};
+    let mut g = Gate::new(Rules {
+        world_id: W1.into(),
+        vm_id: VM.into(),
+    });
+    g.context(S0, 0);
+    let one = g.admission(&[punch_with(G1, r#","sync":[1,2]"#)], &ring(), S0 + 20, 20);
+    assert_eq!(one.sync_sets[&J1].ids(), [1, 2]);
+    let both = g.admission(
+        &[
+            punch_with(G1, r#","sync":[1,2]"#),
+            punch_with(G2, r#","sync":[2]"#),
+        ],
+        &ring(),
+        S0 + 20,
+        20,
+    );
+    assert_eq!(
+        both.sync_sets[&J1].ids(),
+        [2],
+        "fail closed: the ids both hold"
+    );
+    let none = g.admission(&[punch_with(G1, "")], &ring(), S0 + 20, 20);
+    assert!(none.sync_sets[&J1].is_empty());
+}
+
+#[test]
+fn the_contexts_host_sync_never_refuses_it() {
+    let (mut s, mut io) = server();
+    open(&mut s, &mut io, W1);
+    for host_sync in [
+        json!([1, 2]),
+        json!([2, 1]),
+        json!("x"),
+        json!([0]),
+        json!(null),
+    ] {
+        let mut req = context_req(W1, json!({"official": VM}));
+        req["world"]["hostSync"] = host_sync.clone();
+        let r = call(&mut s, &mut io, 0, req);
+        assert_eq!(r["leaseUntilMs"], S0 + 45_000, "{host_sync}: {r}");
+    }
+    use super::grant::SyncSet;
+    assert_eq!(SyncSet::lenient(Some(&json!([1, 2]))).ids(), [1, 2]);
+    assert!(SyncSet::lenient(Some(&json!([2, 1]))).is_empty());
+    assert!(SyncSet::lenient(None).is_empty());
+}

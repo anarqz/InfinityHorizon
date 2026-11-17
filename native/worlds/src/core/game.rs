@@ -176,6 +176,10 @@ pub trait GameWorld: std::marker::Send {
     /// CR-S67: the grant source of the voice blocks (each XUID's signed instant, Unix seconds).
     fn set_grant_voice_blocks(&mut self, _blocks: &BTreeMap<u64, i64>) {}
 
+    /// CR-L53 (MATCHMAKING_API §5f): each admitted XUID's signed mod-sync set, replacing the
+    /// last snapshot's (an XUID it does not list has the empty set).
+    fn set_grant_sync(&mut self, _sets: &BTreeMap<u64, super::grant::SyncSet>) {}
+
     /// Whether this world may become a private official world (WORLDS_OFFICIAL.md §12.2 item 8:
     /// free roam or Road Trip, never a car meet).
     fn supports_private(&self) -> bool {

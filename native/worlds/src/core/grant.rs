@@ -51,7 +51,85 @@ pub struct Claims {
     pub iat: i64,
     pub exp: i64,
     pub relay: Option<GrantRelay>,
+    /// CR-L53 `sync` (MATCHMAKING_API §5f): the seat's mod-sync ids; absent = empty.
+    pub sync: SyncSet,
     pub voice_blocked_until: Option<i64>,
+}
+
+/// A seat's mod-sync ids (MATCHMAKING_API §5f, OD-248): registry ids 1..=255, ascending, unique,
+/// at most [`SyncSet::MAX`]. The world never reads the registry; it compares ids only. Empty
+/// (the default) means no sync at all: fail closed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SyncSet {
+    ids: [u8; SyncSet::MAX],
+    len: u8,
+}
+
+impl SyncSet {
+    pub const MAX: usize = 8;
+    pub const EMPTY: SyncSet = SyncSet {
+        ids: [0; SyncSet::MAX],
+        len: 0,
+    };
+
+    /// The strict form: a JSON array of integers in 1..=255, strictly ascending, at most
+    /// [`SyncSet::MAX`] long; `None` for anything else.
+    pub fn parse(v: &Value) -> Option<SyncSet> {
+        let Value::Array(items) = v else { return None };
+        if items.len() > Self::MAX {
+            return None;
+        }
+        let mut out = SyncSet::EMPTY;
+        for item in items {
+            let id = u8::try_from(item.as_u64()?).ok().filter(|id| *id != 0)?;
+            if out.ids().last().is_some_and(|last| *last >= id) {
+                return None;
+            }
+            out.ids[usize::from(out.len)] = id;
+            out.len += 1;
+        }
+        Some(out)
+    }
+
+    /// `world.hostSync`'s reading: absent or invalid is the empty set, never an error.
+    pub fn lenient(v: Option<&Value>) -> SyncSet {
+        v.and_then(SyncSet::parse).unwrap_or_default()
+    }
+
+    /// A set of these ids (sorted and deduplicated; ids past [`SyncSet::MAX`] and 0 are dropped).
+    pub fn of(ids: &[u8]) -> SyncSet {
+        let mut sorted: Vec<u8> = ids.iter().copied().filter(|id| *id != 0).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        sorted.truncate(Self::MAX);
+        let mut out = SyncSet::EMPTY;
+        out.ids[..sorted.len()].copy_from_slice(&sorted);
+        out.len = sorted.len() as u8;
+        out
+    }
+
+    pub fn ids(&self) -> &[u8] {
+        &self.ids[..usize::from(self.len)]
+    }
+
+    pub fn contains(&self, id: u8) -> bool {
+        self.ids().contains(&id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The ids both sets hold.
+    pub fn intersect(&self, other: &SyncSet) -> SyncSet {
+        let both: Vec<u8> = self
+            .ids()
+            .iter()
+            .copied()
+            .filter(|id| other.contains(*id))
+            .collect();
+        SyncSet::of(&both)
+    }
 }
 
 /// What the authenticated control plane says the grant must be for.
@@ -275,6 +353,12 @@ fn claims_of(v: Value) -> Option<Claims> {
         None | Some(Value::Null) => None,
         Some(r) => Some(relay_of(r)?),
     };
+    // CR-L53: absent (or null) is the empty set; anything but a canonical id list refuses
+    // the grant, as every other malformed member does
+    let sync = match o.remove("sync") {
+        None | Some(Value::Null) => SyncSet::EMPTY,
+        Some(s) => SyncSet::parse(&s)?,
+    };
     let voice_blocked_until = match o.remove("voiceBlockedUntil") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_i64()?),
@@ -306,6 +390,7 @@ fn claims_of(v: Value) -> Option<Claims> {
         iat,
         exp,
         relay,
+        sync,
         voice_blocked_until,
     })
 }

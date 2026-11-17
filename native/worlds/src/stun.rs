@@ -89,6 +89,13 @@ pub fn attribute(data: &[u8], kind: u16, attribute: u16) -> Option<&[u8]> {
     None
 }
 
+/// Every attribute of a STUN message of type `kind`, in order, up to the first truncated one
+/// (empty when the message is not that).
+pub fn attributes_of(data: &[u8], kind: u16) -> impl Iterator<Item = (u16, &[u8])> {
+    let ok = is_framed(data) && u16_at(data, 0) == kind;
+    attributes(if ok { data } else { &[] }).map_while(Result::ok)
+}
+
 /// Like [`attribute`], but the whole message must walk: an attribute running past the end
 /// refuses the message even when it comes after the one asked for (the side channels' rule).
 pub fn attribute_strict(data: &[u8], kind: u16, wanted: u16) -> Option<&[u8]> {

@@ -429,6 +429,7 @@ impl Game for Fh2 {
             base,
             admit: info.admit.clone(),
             voice_blocks: Arc::new(Mutex::new(VoiceBlockTable::default())),
+            sync_sets: BTreeMap::new(),
             rng: Rng::new(info.rng.next_u64()),
             store: self.store.clone(),
             activity,
@@ -491,6 +492,8 @@ pub struct Fh2World {
     now: u64,
     /// The voice blocks of both sources (§6.4), shared with every engine's policy.
     voice_blocks: Arc<Mutex<VoiceBlockTable>>,
+    /// CR-L53: the admission snapshot's signed mod-sync sets, given to every engine.
+    sync_sets: BTreeMap<u64, crate::core::grant::SyncSet>,
     dropped: u64,
     /// Events for the core (peer.synced, peer.left, peer.rejected, requests, notices).
     events: Vec<GameEvent>,
@@ -578,6 +581,7 @@ impl Fh2World {
             // the world's voice and watch apply to every engine, made now or later
             e.set_voice_tuning(self.voice.tuning);
             e.set_voice(self.voice.mode, &self.voice.lobby_muted);
+            e.set_sync_sets(&self.sync_sets);
             if self.watch.is_some() {
                 self.apply_watch(&mut e);
             }
@@ -1194,6 +1198,13 @@ impl GameWorld for Fh2World {
 
     fn set_grant_voice_blocks(&mut self, blocks: &BTreeMap<u64, i64>) {
         self.apply_voice_blocks(VoiceBlockSource::Grant, blocks);
+    }
+
+    fn set_grant_sync(&mut self, sets: &BTreeMap<u64, crate::core::grant::SyncSet>) {
+        self.sync_sets = sets.clone();
+        for e in self.engines.values_mut() {
+            e.set_sync_sets(sets);
+        }
     }
 }
 

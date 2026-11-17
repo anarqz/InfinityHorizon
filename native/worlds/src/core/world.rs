@@ -242,6 +242,9 @@ impl World {
         // `WorldView.private` (free roam or Road Trip); one way, so `false` or absent never
         // makes a private world public again
         let private = world.opt_bool("private", false)?;
+        // CR-L53 `world.hostSync` (MATCHMAKING_API §5f) is the host player's mod-sync set; an
+        // official world has no host player, so it is read for nothing and never refuses the
+        // context (an invalid one is the empty set, never `context_invalid`)
         if private && !self.game.supports_private() {
             return Err(world.bad("private"));
         }
@@ -290,6 +293,7 @@ impl World {
             self.game.kick(*x, ctx.now, out);
         }
         self.game.set_grant_voice_blocks(&outcome.voice_blocks);
+        self.game.set_grant_sync(&outcome.sync_sets);
         let mut m = Map::new();
         m.insert("admitted".into(), json!(outcome.admitted));
         m.insert("proofGrants".into(), json!(outcome.proof_grants));
