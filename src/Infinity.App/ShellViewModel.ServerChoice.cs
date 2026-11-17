@@ -104,6 +104,13 @@ public sealed partial class ShellViewModel
         {
             try { custom = CustomServer.ParseOrigin(_serverAddress); }
             catch (ArgumentException) { _serverEditError = S["server.invalid_address"]; Changed(string.Empty); return false; }
+            // DEVLAUNCH: a listed or typed row that is a development build's own --server is that server, not a custom one (a custom
+            // server would refuse the development hook)
+            if (DevelopmentServer is { } development && SameOrigin(custom.ToString(), development.ToString()))
+            {
+                Log("server: the chosen server is this development build's own; it stays the development server");
+                custom = null;
+            }
         }
         try { ServerChoice.Write(StateRoot, custom); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

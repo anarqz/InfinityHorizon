@@ -51,7 +51,86 @@ pub struct Claims {
     pub iat: i64,
     pub exp: i64,
     pub relay: Option<GrantRelay>,
+    /// CR-L53 `sync` (MATCHMAKING_API §5f): the seat's mod-sync ids; absent = empty.
+    pub sync: SyncSet,
     pub voice_blocked_until: Option<i64>,
+}
+
+/// A seat's mod-sync ids (MATCHMAKING_API §5f, OD-248): registry ids 1..=255, ascending, unique,
+/// at most [`SyncSet::MAX`]. The world never reads the registry; it compares ids only. Empty
+/// (the default) means no sync at all: fail closed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SyncSet {
+    ids: [u8; SyncSet::MAX],
+    len: u8,
+}
+
+impl SyncSet {
+    pub const MAX: usize = 8;
+    pub const EMPTY: SyncSet = SyncSet {
+        ids: [0; SyncSet::MAX],
+        len: 0,
+    };
+
+    /// The strict form: a JSON array of integers in 1..=255, strictly ascending, at most
+    /// [`SyncSet::MAX`] long; `None` for anything else.
+    pub fn parse(v: &Value) -> Option<SyncSet> {
+        let Value::Array(items) = v else { return None };
+        if items.len() > Self::MAX {
+            return None;
+        }
+        let mut out = SyncSet::EMPTY;
+        for item in items {
+            let id = u8::try_from(item.as_u64()?).ok().filter(|id| *id != 0)?;
+            if out.ids().last().is_some_and(|last| *last >= id) {
+                return None;
+            }
+            out.ids[usize::from(out.len)] = id;
+            out.len += 1;
+        }
+        Some(out)
+    }
+
+    /// The reading of the grant's `sync` and of `world.hostSync`: absent or invalid is the empty
+    /// set, never an error.
+    pub fn lenient(v: Option<&Value>) -> SyncSet {
+        v.and_then(SyncSet::parse).unwrap_or_default()
+    }
+
+    /// A set of these ids (sorted and deduplicated; ids past [`SyncSet::MAX`] and 0 are dropped).
+    pub fn of(ids: &[u8]) -> SyncSet {
+        let mut sorted: Vec<u8> = ids.iter().copied().filter(|id| *id != 0).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        sorted.truncate(Self::MAX);
+        let mut out = SyncSet::EMPTY;
+        out.ids[..sorted.len()].copy_from_slice(&sorted);
+        out.len = sorted.len() as u8;
+        out
+    }
+
+    pub fn ids(&self) -> &[u8] {
+        &self.ids[..usize::from(self.len)]
+    }
+
+    pub fn contains(&self, id: u8) -> bool {
+        self.ids().contains(&id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The ids both sets hold.
+    pub fn intersect(&self, other: &SyncSet) -> SyncSet {
+        let both: Vec<u8> = self
+            .ids()
+            .iter()
+            .copied()
+            .filter(|id| other.contains(*id))
+            .collect();
+        SyncSet::of(&both)
+    }
 }
 
 /// What the authenticated control plane says the grant must be for.
@@ -68,7 +147,16 @@ pub struct Context<'a> {
 /// A JSON value read with duplicate members refused and a depth limit.
 struct Strict(Value);
 
-struct StrictVisitor(usize);
+/// The depth, and whether the value sits inside the top-level `sync` member (CR-L53: its value
+/// has no depth limit, since any bad shape there reads as the empty set; duplicates are still
+/// refused).
+struct StrictVisitor(usize, bool);
+
+impl StrictVisitor {
+    fn too_deep(&self) -> bool {
+        self.0 >= MAX_DEPTH && !self.1
+    }
+}
 
 impl<'de> Visitor<'de> for StrictVisitor {
     type Value = Strict;
@@ -103,23 +191,24 @@ impl<'de> Visitor<'de> for StrictVisitor {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Strict, A::Error> {
-        if self.0 >= MAX_DEPTH {
+        if self.too_deep() {
             return Err(de::Error::custom("depth"));
         }
         let mut out = Vec::new();
-        while let Some(v) = seq.next_element_seed(Depth(self.0 + 1))? {
+        while let Some(v) = seq.next_element_seed(Depth(self.0 + 1, self.1))? {
             out.push(v.0);
         }
         Ok(Strict(Value::Array(out)))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Strict, A::Error> {
-        if self.0 >= MAX_DEPTH {
+        if self.too_deep() {
             return Err(de::Error::custom("depth"));
         }
         let mut out = Map::new();
         while let Some(k) = map.next_key::<String>()? {
-            let v = map.next_value_seed(Depth(self.0 + 1))?;
+            let in_sync = self.1 || self.0 == 0 && k == "sync";
+            let v = map.next_value_seed(Depth(self.0 + 1, in_sync))?;
             if out.insert(k, v.0).is_some() {
                 return Err(de::Error::custom("duplicate member"));
             }
@@ -128,19 +217,21 @@ impl<'de> Visitor<'de> for StrictVisitor {
     }
 }
 
-struct Depth(usize);
+struct Depth(usize, bool);
 
 impl<'de> de::DeserializeSeed<'de> for Depth {
     type Value = Strict;
     fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Strict, D::Error> {
-        d.deserialize_any(StrictVisitor(self.0))
+        d.deserialize_any(StrictVisitor(self.0, self.1))
     }
 }
 
-/// Parses JSON refusing duplicate members and nesting past the claims' depth.
+/// Parses JSON refusing duplicate members at any depth and nesting past the claims' depth
+/// (except inside the top-level `sync`, whose bad shapes read as empty; serde_json's own
+/// recursion limit, 128, still bounds it).
 pub fn strict_json(bytes: &[u8]) -> Option<Value> {
     let mut d = serde_json::Deserializer::from_slice(bytes);
-    let v = de::DeserializeSeed::deserialize(Depth(0), &mut d).ok()?;
+    let v = de::DeserializeSeed::deserialize(Depth(0, false), &mut d).ok()?;
     d.end().ok()?;
     Some(v.0)
 }
@@ -275,6 +366,10 @@ fn claims_of(v: Value) -> Option<Claims> {
         None | Some(Value::Null) => None,
         Some(r) => Some(relay_of(r)?),
     };
+    // CR-L53 (§5f, the same rules as `world.hostSync`): absent, null or anything but a canonical
+    // id list is the empty set. Fail closed on sync, never on the join (mods never gate joins;
+    // the C# `RelayGrantVerifier` reads it the same way)
+    let sync = SyncSet::lenient(o.remove("sync").as_ref());
     let voice_blocked_until = match o.remove("voiceBlockedUntil") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_i64()?),
@@ -306,6 +401,7 @@ fn claims_of(v: Value) -> Option<Claims> {
         iat,
         exp,
         relay,
+        sync,
         voice_blocked_until,
     })
 }

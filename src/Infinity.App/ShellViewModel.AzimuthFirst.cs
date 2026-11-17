@@ -32,6 +32,7 @@ public sealed partial class ShellViewModel
     public void ChooseAzimuthFirst(string folder)
     {
         if (!ShowAzimuthFirst || _searching) return;
+        if (RefusesPickedAzimuth(folder)) return; // DEVLAUNCH: a development build only its --azimuth folder
         bool saved;
         try { saved = AzimuthSetup.SaveChoice(_stateDirectory, folder, StateRoot); }
         catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException)

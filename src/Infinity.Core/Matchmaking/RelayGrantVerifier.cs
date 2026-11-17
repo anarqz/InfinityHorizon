@@ -23,12 +23,49 @@ public sealed record RelayGrantClaims
     /// <summary>CR-S57: the signed relay both sides meet at (the last claim, absent when none). The only relay ever contacted.</summary>
     [JsonPropertyName("relay"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public RelayGrantRelay? Relay { get; init; }
     /// <summary>
+    /// CR-L53 (MATCHMAKING_API.md §5f, OD-248): the car-state sync ids of the seat's declared mods, ascending, unique, at most 8, each in
+    /// 1..255 (the last claims, after <see cref="Relay"/>; absent when empty, so a grant without it is unchanged). Anything else
+    /// (not an array, out of range, duplicated, unsorted, longer than 8) reads as empty, never as a refused grant: fail closed.
+    /// A compatibility hint only, never authority.
+    /// </summary>
+    [JsonPropertyName("sync"), JsonConverter(typeof(SyncIdsConverter)), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public IReadOnlyList<int>? Sync { get; init; }
+    /// <summary>
     /// CR-S67: the joiner account's voice block in force when the grant was signed, in Unix seconds (the last claim, after
     /// <see cref="Relay"/>; absent when no block is in force, so an unblocked grant's bytes are unchanged).
     /// </summary>
     [JsonPropertyName("voiceBlockedUntil"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? VoiceBlockedUntil { get; init; }
 }
 
+/// <summary>Reads the §5f <c>sync</c> claim leniently: a valid list as is, anything else as an empty list (fail closed, never a refusal).</summary>
+internal sealed class SyncIdsConverter : JsonConverter<IReadOnlyList<int>>
+{
+    public const int Max = 8;
+
+    public override IReadOnlyList<int>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartArray) { reader.Skip(); return []; }
+        var ids = new List<int>();
+        var valid = true;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var id)
+                && id is >= 1 and <= 255 && (ids.Count == 0 || id > ids[^1]) && ids.Count < Max) ids.Add(id);
+            else
+            {
+                valid = false;
+                if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject) reader.Skip();
+            }
+        }
+        return valid ? ids : [];
+    }
+
+    public override void Write(Utf8JsonWriter writer, IReadOnlyList<int> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var id in value) writer.WriteNumberValue(id);
+        writer.WriteEndArray();
+    }
+}
 /// <summary>
 /// Exact fi_protocol::matchmaking::RelayGrantHost mirror (WORLDS_OFFICIAL.md §3): <c>{xuid}</c> (a player host's, the contract's) or
 /// <c>{official: vmId}</c> (a Worlds host). OD-208: this client verifies only the official one; a player host's is refused.
@@ -171,9 +208,9 @@ public static class RelayGrantVerifier
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectNullableAnnotations = true,
         AllowDuplicateProperties = false,
-        MaxDepth = 4,
+        MaxDepth = 64, // deep enough that a non-flat sync reads as empty (SyncIdsConverter) instead of refusing the grant
     };
-    private static readonly JsonDocumentOptions KidJson = new() { AllowDuplicateProperties = false, MaxDepth = 4 };
+    private static readonly JsonDocumentOptions KidJson = new() { AllowDuplicateProperties = false, MaxDepth = 64 };
 
     public static RelayGrantClaims Verify(RelayGrant grant, RelayGrantVerifyKeys keys, long nowUnix, RelayGrantContext context)
     {

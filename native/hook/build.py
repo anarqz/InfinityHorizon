@@ -58,6 +58,7 @@ SOURCES = [
     "src/infinity/udp_proof.c",
     "src/infinity/carstate.c",
     "src/infinity/carstate_hook.c",
+    "src/infinity/carlights.c",
     "src/infinity/carmeet.c",
     "src/infinity/watchdog.c",
     "src/infinity/follow.c",

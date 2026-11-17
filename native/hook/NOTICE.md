@@ -3,6 +3,10 @@
 The ForzaInfinity hook is free software under the **GNU General Public License, version 3 or
 later** (`LICENSE`).
 
+One exception: `include/infinity_carsync.h`, the car-state sync API header that mods include, is under the
+**MIT License** (its own `SPDX-License-Identifier: MIT` notice; owner decision, 2026-11-17), so mods of any
+licence can use it. It includes no GPL file. Everything else here stays GPL-3.0-or-later.
+
 It started as a fork of **Forza Horizon 2 Extra Options** by **Arthur (RokkuDayo)**,
 <https://github.com/RokkuDayo/ForzaHorizon2_ExtraOptions>, also GPL-3.0. ForzaInfinity's own
 code was written on top of Extra Options 0.2.74 (upstream commit `c2e3298`) as the `fh2online`

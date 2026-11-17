@@ -123,6 +123,9 @@ pub struct Outcome {
     pub kicked: Vec<u64>,
     /// CR-S67: each XUID's latest signed `voiceBlockedUntil` (0: none).
     pub voice_blocks: BTreeMap<u64, i64>,
+    /// CR-L53: each admitted XUID's signed `sync` set; several grants of one XUID give the ids
+    /// all of them hold (fail closed).
+    pub sync_sets: BTreeMap<u64, grant::SyncSet>,
 }
 
 /// A world's admission state.
@@ -357,6 +360,10 @@ impl Gate {
             let block = claims.voice_blocked_until.unwrap_or(0);
             let e = out.voice_blocks.entry(xuid).or_insert(block);
             *e = (*e).max(block);
+            out.sync_sets
+                .entry(xuid)
+                .and_modify(|s| *s = s.intersect(&claims.sync))
+                .or_insert(claims.sync);
             let lifetime = (claims.exp.saturating_mul(1000) - now_ms as i64).max(0) as u64;
             let entry = Entry {
                 expires: claims.exp,

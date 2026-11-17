@@ -11,7 +11,9 @@ patches/0006 sets MOD_VERSION to 0.6.1: upstream built its 0.6.1 release with th
 uncommitted (main still says 0.6.0), and the version resource (FILEVERSION 0.6.1.0) and the hook's
 ExtraOptions gate (FI_EO_SUPPORTED_MS/LS) follow it. The label is 0.6.1+dae2380 (MOD_VERSION + the pinned
 upstream commit): ProductVersion and the hook's FI_EO_SUPPORTED, checked equal here. FM5's
-DisableParentalLocks fix (the former 0006) is upstream since 0.6.1.
+DisableParentalLocks fix (the former 0006) is upstream since 0.6.1. patches/0007 gives the local car its own
+beam and glow presets for daylight headlights instead of zeroing the per-model ones, so same-model traffic stays
+dark (CR-L53).
 
 Usage: python build.py /path/to/zig [--dev] [--build-dir DIR] [--output PATH]
 

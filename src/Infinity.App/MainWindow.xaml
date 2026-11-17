@@ -922,9 +922,9 @@
                         HorizontalAlignment="Left" Margin="-6,0,0,14" IsEnabled="{Binding Idle}" AutomationProperties.Name="{Binding S[welcome.back]}"><StackPanel Orientation="Horizontal"><Path Data="{StaticResource IconBack}" Style="{StaticResource InlineIcon}" Margin="0,0,6,0" /><TextBlock Text="{Binding S[welcome.back]}" VerticalAlignment="Center" /></StackPanel></Button>
                 <TextBlock Text="{Binding S[signin.title]}" Style="{StaticResource PageTitle}" FontSize="24" />
                 <TextBlock Text="{Binding S[native.subtitle]}" Margin="0,6,0,20" Style="{StaticResource PageSubtitle}" />
-                <!-- CR-L39: on a custom server the player sees where the sign-in goes and whether it is encrypted. -->
+                <!-- CR-L39: on a custom server the player sees where the sign-in goes and whether it is encrypted; DEVLAUNCH: a development build's too. -->
                 <TextBlock Margin="0,-12,0,4" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource InfinityGold}"
-                           Visibility="{Binding ShowServerSecurity, Converter={StaticResource Visible}}">
+                           Visibility="{Binding ShowSignInServer, Converter={StaticResource Visible}}">
                   <Run Text="{Binding ServerChoiceText, Mode=OneWay}" /><Run Text=" " /><Run Text="{Binding ServerSecurityText, Mode=OneWay}" />
                 </TextBlock>
                 <!-- OD122-L9: the server and relay pickers are one step away from sign-in too. -->

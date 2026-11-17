@@ -200,8 +200,8 @@ public sealed record RelayGrantRelay
 }
 
 /// <summary>
-/// One mod of a mod set (OD-112, MATCHMAKING_API.md §2.7): <c>id</c> the manifest's multiplayer
-/// <c>compatibilityId</c>, <c>version</c> its revision (decimal), <c>fingerprint</c> 64 lowercase hex
+/// One mod of a mod set (OD-112, MATCHMAKING_API.md §2.7): <c>id</c> the ExtraOptions <c>mod.json</c> id in the
+/// contract's form (<c>ExtraOptionsModSet.LobbyId</c>; not the manifest's <c>compatibilityId</c>), <c>version</c> its revision (decimal), <c>fingerprint</c> 64 lowercase hex
 /// digits (<c>infinity-mod-compatibility-v1</c>). A set is sorted by id, unique, at most <see cref="MatchmakingLimits.ModsMax"/> (100).
 /// </summary>
 public sealed record ModEntry

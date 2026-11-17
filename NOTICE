@@ -7,7 +7,9 @@ GNU General Public License as published by the Free Software Foundation, version
 
 The server/ folder is not covered by this notice: it is licensed under the GNU Affero General
 Public License version 3 (AGPL-3.0; see server/LICENSE and server/NOTICE). Everything else in this
-repository stays GPL-3.0-only.
+repository stays GPL-3.0-only, but for one
+header: native/hook/include/infinity_carsync.h, the car-state sync API that mods include, is under
+the MIT License (its own notice inside the file).
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
 even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU

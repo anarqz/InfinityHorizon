@@ -397,14 +397,75 @@ int fi_launch_peer_observation(unsigned long long xuid, unsigned kind, unsigned 
 /* NR-6: another player's model and 43 part rows read from its relayed player object (PlayerParts, 0x27;
    flags bit 0 the model, bit 1 the parts, bit 2 a new object); 1 queued. */
 int fi_launch_player_parts(unsigned long long xuid, unsigned peer_index, unsigned flags, unsigned model, const unsigned *parts);
-void azimuth_carstate_local(int lights, int roof);
+/* CR-L53 (MATCHMAKING_API §5f): the car state datagram. 0xC0F1 core layout 1 (lights, roof) as
+   ever; 0xC0FC parts and signals (FH2 ANNA's: sent and applied only while FH2ANNA.dll is in this
+   process); 0..2 0xC0FD mod blobs (only mods registered through include/infinity_carsync.h). */
+#define FI_CS_PARTS_MASK 0x0fffu /* parts bits 0 roof .. 11 active aero */
+#define FI_CS_BLOB_MAX 64
+#define FI_CS_BLOBS_PER_DATAGRAM 2
+typedef struct {
+    unsigned char id, version, length;
+    unsigned char bytes[FI_CS_BLOB_MAX];
+} FiCarBlob;
+typedef struct {
+    unsigned char lights, roof, peer, flags;
+    unsigned short sequence;
+    unsigned long long xuid;
+    int has_position;
+    float position[3];
+    int has_parts; /* a valid 0xC0FC came */
+    unsigned char signals;
+    unsigned short parts;
+    int blob_count;
+    FiCarBlob blobs[FI_CS_BLOBS_PER_DATAGRAM];
+} FiCarState;
+/* An up datagram (hook -> world) of `state` (lights, roof, sequence, xuid; has_parts, signals and
+   parts; its blobs) into `out`: its length, 0 when it does not fit or a field is out of range. */
+int fi_carstate_encode_up(unsigned char *out, int capacity, const FiCarState *state);
+/* A down datagram (world -> hook): 1 with `state` filled when it holds a valid 0xC0F1 layout 1 of
+   28 bytes; a 0xC0FC or 0xC0FD that breaks §5f's shape is left out (has_parts 0, no blob). */
+int fi_carstate_decode_down(const unsigned char *data, int size, FiCarState *state);
+/* FH2ANNA.dll is loaded in this process (looked at once a second). */
+int fi_anna_loaded(void);
+/* The local car's state (carstate_hook.c, each update of it): lights 0/1/2, roof 0/1, signals
+   0 off / 1 hazards / 2 left / 3 right, parts as 0xC0FC's bits (bit 0 is the roof). */
+void azimuth_carstate_local(int lights, int roof, int signals, unsigned parts);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);
+/* car is no longer shown as a player's (not a network car, the game's own again, or its slot was
+   reused): no player stays matched to it. */
+void azimuth_carstate_unmatch(void *car);
 /* Whether azimuth_carstate_wanted needs `car`'s position now (else it is passed NULL). */
 int azimuth_carstate_needs_position(void *car);
-/* What car `car` (at `position`, NULL if unknown) should show, when it is a player's: 1 and the
-   state, else 0. */
-int azimuth_carstate_wanted(void *car, const float position[3], int *lights, int *roof);
+/* What a remote player's car should show (has_parts only when it came with 0xC0FC and FH2 ANNA is
+   loaded here). */
+typedef struct {
+    int lights, roof;
+    int has_parts;
+    unsigned signals, parts;
+} FiCarWanted;
+/* A ForzaCar that may be another player's (+0x4d08 kind 2, 3 or 5: neither the local player's 0 nor
+   the AI's and traffic's 1/4; live test 2026-11-17: another human was kind 3, and kind 2 also covers
+   drivatars and pooled session cars, so kind only pre-filters: the match is by position). The kind
+   read goes to *kind (0xffffffff unreadable) when kind is not NULL. */
+int fi_car_remote_kind(const void *car, unsigned *kind);
+/* For the diagnostic line: a player with a fresh position and no car matched exists (cheap when not),
+   and a car of another kind near it was seen. */
+int azimuth_carstate_unmatched_fresh(void);
+void azimuth_carstate_candidate(void *car, unsigned kind, const float position[3]);
+/* What car `car` (fi_car_remote_kind, at `position`, NULL if unknown) should show, when it is a
+   player's: 1 and the state, else 0. */
+int azimuth_carstate_wanted(void *car, const float position[3], FiCarWanted *wanted);
+/* carlights.c: daylight headlights of the player's car on presets of its own (CR-L53). With its
+   headlights forced on it gets its own copies of its headlight presets (amount types 13 and 17,
+   beams and glows) with a daylight threshold of 0, attached to its own light records; the shared
+   per-model presets are never written (no same-model traffic lit). Remote cars: none in v1
+   (OD-248 answers). fi_carlights_local: ExtraOptions' headlight_beams.c, each update of the car;
+   fi_carlights_upload: called just before the game uploads the beams (glow 0) or glows (glow 1)
+   of a scene (ExtraOptions.Infinity's upload detour): copies attached, released copies put back. */
+void fi_carlights_bind(unsigned char *game_image);
+void fi_carlights_local(void *car, int on);
+void fi_carlights_upload(void *system, int glow);
 /* The legacy or launcher-ticket gamertag used for local identity replies. */
 const wchar_t *azimuth_account_gamertag(void);
 /* The active profile is Noob (its own save, no progress gates), from the server's word. */

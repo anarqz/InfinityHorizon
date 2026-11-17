@@ -137,6 +137,7 @@ public sealed partial class ShellViewModel
         // chosen by hand); the searches use SetInstallAsync
         set
         {
+            value = AllowedInstall(value); // DEVLAUNCH: a development build only its --azimuth folder
             SelectInstall(value);
             if (value is not null)
             {
@@ -156,6 +157,7 @@ public sealed partial class ShellViewModel
     /// </summary>
     private async Task SetInstallAsync(AzimuthInstall? value)
     {
+        value = AllowedInstall(value); // DEVLAUNCH: a development build only its --azimuth folder
         SelectInstall(value);
         if (value is not null)
         {

@@ -52,7 +52,7 @@ pub mod watch;
 pub mod weather;
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
@@ -341,6 +341,14 @@ pub(crate) struct Peer {
     universe_due: bool,
     car_hook: Option<SocketAddr>,
     car_state_at: Option<i64>,
+    /// CR-L53 (side.rs): the newest up's parts and signals, the newest blob per sync id (at most
+    /// two, each with when it was last sent), whether this hook speaks §5f, and the coalescing
+    /// of change-triggered passes.
+    car_parts: Option<super::carstate::Parts>,
+    car_mods: [Option<(super::carstate::ModBlob, i64)>; super::carstate::MODS_PER_DATAGRAM],
+    car_speaks: bool,
+    car_passed_at: Option<i64>,
+    car_pending: bool,
     last_car_at: Option<i64>,
     last_car_body: Option<Bits>,
     /// Voice proximity's jump counter (teleports, new cars, a car known again).
@@ -596,6 +604,8 @@ pub struct Engine {
     release_keep: HashMap<u64, Vec<M>>,
     side_rates: DotMap<u64, SideRate>,
     pub side_channel_rate_drops: u64,
+    /// CR-L53: each XUID's signed mod-sync set (absent: empty, no sync).
+    sync_sets: BTreeMap<u64, crate::core::grant::SyncSet>,
     /// Each sender's reliable fan-out tokens and when they were last refilled (send.rs).
     fanout: DotMap<u64, (f64, i64)>,
     /// Bucket-list co-op (bucket.rs).
@@ -711,6 +721,7 @@ impl Engine {
             release_keep: HashMap::new(),
             side_rates: DotMap::new(),
             side_channel_rate_drops: 0,
+            sync_sets: BTreeMap::new(),
             fanout: DotMap::new(),
             bucket: bucket::Bucket::default(),
             ev: races::Events::default(),
@@ -1173,6 +1184,11 @@ impl Engine {
             universe_due: false,
             car_hook: None,
             car_state_at: None,
+            car_parts: None,
+            car_mods: [None; super::carstate::MODS_PER_DATAGRAM],
+            car_speaks: false,
+            car_passed_at: None,
+            car_pending: false,
             last_car_at: None,
             last_car_body: None,
             car_jumps: 0,
