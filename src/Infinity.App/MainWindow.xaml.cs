@@ -27,6 +27,12 @@ public partial class MainWindow : Window
         var arguments = cli.Skip(1).ToList();
         var state = StateRoot;
         var config = ConfigFor(arguments);
+        // DEVLAUNCH: a development build keeps the server it started on, so "This build's server" means it after a custom pick too
+        if (!BuildProfile.ProductionOnly && !config.Production && !config.Custom)
+        {
+            try { DevelopmentLaunch.SaveCommandLineServer(state, config.Server, config.Portal); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { App.Log("server: the development server could not be kept: " + error.GetType().Name); }
+        }
         var vm = new ShellViewModel(strings, config, state);
 
         DataContext = vm;
@@ -638,7 +644,9 @@ public partial class MainWindow : Window
         {
             // DEVLAUNCH: the original arguments carry over (--azimuth, --locale, --environment...); a custom choice leaves out only
             // --server/--portal, which would win over it (DevelopmentLaunch.RestartArguments)
-            var arguments = DevelopmentLaunch.RestartArguments(Environment.GetCommandLineArgs().Skip(1).ToList(), customChosen: ServerChoice.Read(StateRoot) is not null);
+            // back to "This build's server" after a custom launch: the kept development server, never the build default
+            var arguments = DevelopmentLaunch.RestartArguments(Environment.GetCommandLineArgs().Skip(1).ToList(), customChosen: ServerChoice.Read(StateRoot) is not null,
+                BuildProfile.ProductionOnly ? null : DevelopmentLaunch.ReadCommandLineServer(StateRoot));
             var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath ?? "infinity.exe") { UseShellExecute = false };
             foreach (var argument in arguments) start.ArgumentList.Add(argument);
             System.Diagnostics.Process.Start(start)?.Dispose();

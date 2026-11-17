@@ -45,8 +45,16 @@ public sealed partial class ShellViewModel
         return true;
     }
 
-    /// <summary>A development build's command-line server (not a custom choice), which the picker's first row stands for.</summary>
-    private Uri? DevelopmentServer => !BuildProfile.ProductionOnly && !_config.Production && !_config.Custom ? _config.Server : null;
+    /// <summary>
+    /// A development build's command-line server, which the picker's first row stands for: the running one, or on a custom server the
+    /// one the build was started with (kept in its state root, <see cref="DevelopmentLaunch.ReadCommandLineServer"/>); never the default.
+    /// </summary>
+    private Uri? DevelopmentServer => BuildProfile.ProductionOnly || _config.Production ? null
+        : !_config.Custom ? _config.Server
+        : (_keptDevelopmentServer ??= new(DevelopmentLaunch.ReadCommandLineServer(StateRoot)?.Server)).Server;
+
+    private sealed record KeptServer(Uri? Server);
+    private KeptServer? _keptDevelopmentServer;
 
     /// <summary>The sign-in form names the server it signs in to on a custom server and in a development build.</summary>
     public bool ShowSignInServer => _config.Custom || DevelopmentServer is not null;

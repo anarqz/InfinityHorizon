@@ -54,9 +54,64 @@ public static class DevelopmentLaunch
     /// server was chosen, the <c>--server</c> / <c>--portal</c> pairs: a development build's explicit <c>--server</c> wins over the
     /// saved choice (<see cref="ServerChoice.Apply"/>), so the choice would otherwise be lost.
     /// </summary>
-    public static IReadOnlyList<string> RestartArguments(IReadOnlyList<string> original, bool customChosen)
+    /// <remarks>
+    /// Back from a custom server to "This build's server" (<paramref name="customChosen"/> false): when the arguments no longer name a
+    /// server (that custom launch was restarted without them), <paramref name="commandLineServer"/> (<see cref="ReadCommandLineServer"/>)
+    /// is added as <c>--server</c>/<c>--portal</c>, so the row always means the server the build was started with.
+    /// </remarks>
+    public static IReadOnlyList<string> RestartArguments(IReadOnlyList<string> original, bool customChosen, (Uri Server, Uri Portal)? commandLineServer = null)
     {
         ArgumentNullException.ThrowIfNull(original);
+        var kept = Filtered(original, customChosen);
+        if (!customChosen && commandLineServer is { } started && !kept.Contains("--server"))
+        {
+            kept.Add("--server"); kept.Add(started.Server.ToString());
+            if (!kept.Contains("--portal")) { kept.Add("--portal"); kept.Add(started.Portal.ToString()); }
+        }
+        return kept;
+    }
+
+    /// <summary>The file in a development build's state root that keeps the server it was last started on (not a custom one).</summary>
+    public const string CommandLineServerFile = "development-server.json";
+
+    private sealed record SavedServer(string? Server, string? Portal);
+
+    private static readonly System.Text.Json.JsonSerializerOptions Json = new(System.Text.Json.JsonSerializerDefaults.Web);
+
+    /// <summary>Keeps the development server a launch started on (its command line's, or the build default when none was named).</summary>
+    public static void SaveCommandLineServer(string root, Uri server, Uri portal)
+    {
+        ArgumentNullException.ThrowIfNull(server);
+        ArgumentNullException.ThrowIfNull(portal);
+        ServerSelection.Validate(server, portal, production: false);
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, CommandLineServerFile);
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(new SavedServer(server.ToString(), portal.ToString()), Json));
+        File.Move(temporary, path, overwrite: true);
+    }
+
+    /// <summary>The kept development server, or null (none kept, unreadable, or not a development server).</summary>
+    public static (Uri Server, Uri Portal)? ReadCommandLineServer(string root)
+    {
+        try
+        {
+            var path = Path.Combine(root, CommandLineServerFile);
+            if (!File.Exists(path)) return null;
+            var saved = System.Text.Json.JsonSerializer.Deserialize<SavedServer>(File.ReadAllText(path), Json);
+            if (saved is not { Server: { Length: > 0 } server, Portal: { Length: > 0 } portal }) return null;
+            var (s, p) = (new Uri(server, UriKind.Absolute), new Uri(portal, UriKind.Absolute));
+            ServerSelection.Validate(s, p, production: false);
+            return (s, p);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException or UriFormatException)
+        {
+            return null;
+        }
+    }
+
+    private static List<string> Filtered(IReadOnlyList<string> original, bool customChosen)
+    {
         var kept = new List<string>(original.Count);
         for (var i = 0; i < original.Count; i++)
         {
