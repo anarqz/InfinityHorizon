@@ -610,7 +610,7 @@ fn punch_with(grant: &str, extra: &str) -> Value {
 }
 
 #[test]
-fn the_grants_sync_claim_is_a_canonical_id_list_or_absent() {
+fn the_grants_sync_claim_is_a_canonical_id_list_or_else_empty() {
     use super::grant::SyncSet;
     let ctx = Context {
         world: W1,
@@ -650,9 +650,26 @@ fn the_grants_sync_claim_is_a_canonical_id_list_or_absent() {
         r#","sync":{"1":true}"#,
         r#","sync":[1,2,3,4,5,6,7,8,9]"#,
         r#","sync":[[1]]"#,
+        r#","sync":[]"#,
     ] {
-        assert_eq!(verify(bad), Err(Failure::Invalid), "{bad}");
+        // a bad shape is the empty set (fail closed on sync, never on the join): the grant
+        // still verifies
+        assert_eq!(verify(bad), Ok(SyncSet::EMPTY), "{bad}");
     }
+    // the signature still covers the bytes: a bad-shaped claim changed after signing is refused
+    let (c, _) = sign(&claims(G1, W1, &official_host(), r#","sync":[2,1]"#));
+    let (_, other) = sign(&claims(G1, W1, &official_host(), r#","sync":[1,2]"#));
+    assert_eq!(
+        grant::verify(&c, &other, &ring(), NOW, ctx).unwrap_err(),
+        Failure::Invalid
+    );
+    // and every other check still applies to a grant with a bad `sync`
+    let (c, s) = sign(&claims(G1, W1, &official_host(), r#","sync":"x""#));
+    let other_world = Context { world: W2, ..ctx };
+    assert_eq!(
+        grant::verify(&c, &s, &ring(), NOW, other_world).unwrap_err(),
+        Failure::ContextMismatch
+    );
 }
 
 #[test]

@@ -91,7 +91,8 @@ impl SyncSet {
         Some(out)
     }
 
-    /// `world.hostSync`'s reading: absent or invalid is the empty set, never an error.
+    /// The reading of the grant's `sync` and of `world.hostSync`: absent or invalid is the empty
+    /// set, never an error.
     pub fn lenient(v: Option<&Value>) -> SyncSet {
         v.and_then(SyncSet::parse).unwrap_or_default()
     }
@@ -353,12 +354,10 @@ fn claims_of(v: Value) -> Option<Claims> {
         None | Some(Value::Null) => None,
         Some(r) => Some(relay_of(r)?),
     };
-    // CR-L53: absent (or null) is the empty set; anything but a canonical id list refuses
-    // the grant, as every other malformed member does
-    let sync = match o.remove("sync") {
-        None | Some(Value::Null) => SyncSet::EMPTY,
-        Some(s) => SyncSet::parse(&s)?,
-    };
+    // CR-L53 (§5f, the same rules as `world.hostSync`): absent, null or anything but a canonical
+    // id list is the empty set. Fail closed on sync, never on the join (mods never gate joins;
+    // the C# `RelayGrantVerifier` reads it the same way)
+    let sync = SyncSet::lenient(o.remove("sync").as_ref());
     let voice_blocked_until = match o.remove("voiceBlockedUntil") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_i64()?),
