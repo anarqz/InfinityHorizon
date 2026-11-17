@@ -214,6 +214,8 @@ impl World {
             had
         };
         self.admission = Admission::default();
+        // CR-L53: no snapshot, no sync sets (fail closed until the next admission)
+        self.game.set_grant_sync(&std::collections::BTreeMap::new());
         if had {
             let id = self.id.clone();
             ctx.notice(

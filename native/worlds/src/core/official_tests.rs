@@ -721,3 +721,167 @@ fn the_contexts_host_sync_never_refuses_it() {
     assert!(SyncSet::lenient(Some(&json!([2, 1]))).is_empty());
     assert!(SyncSet::lenient(None).is_empty());
 }
+
+/// Every sync-set snapshot the core handed the game, as (XUID, ids).
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<Vec<(u64, Vec<u8>)>>>>;
+
+/// A game that records the sync sets the core hands it (CR-L53).
+struct SyncSpy(Seen);
+
+struct SpyWorld(Seen);
+
+impl super::game::Game for SyncSpy {
+    fn id(&self) -> &'static str {
+        "spy"
+    }
+    fn open(
+        &self,
+        _info: super::game::OpenInfo,
+    ) -> Result<
+        (Box<dyn super::game::GameWorld>, Vec<super::game::Notice>),
+        crate::control::proto::CmdError,
+    > {
+        Ok((Box::new(SpyWorld(self.0.clone())), Vec::new()))
+    }
+}
+
+impl super::game::GameWorld for SpyWorld {
+    fn spec(&self) -> Value {
+        json!({})
+    }
+    fn lobbies(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+    fn command(
+        &mut self,
+        _: &str,
+        _: super::fields::Obj,
+        _: &mut super::game::GameCtx,
+    ) -> Option<crate::control::proto::CmdResult> {
+        None
+    }
+    fn receive(&mut self, _: &[u8], _: SocketAddr, _: u64, _: &mut Vec<super::game::Send>) {}
+    fn tick(&mut self, _: u64, _: &mut Vec<super::game::Send>) {}
+    fn next_tick(&self, _: u64) -> Option<u64> {
+        None
+    }
+    fn synced(&self) -> usize {
+        0
+    }
+    fn handshaking(&self) -> usize {
+        0
+    }
+    fn kick(&mut self, _: u64, _: u64, _: &mut Vec<super::game::Send>) -> usize {
+        0
+    }
+    fn close_all(&mut self, _: &mut Vec<super::game::Send>) {}
+    fn state(&self) -> serde_json::Map<String, Value> {
+        serde_json::Map::new()
+    }
+    fn dropped(&self) -> u64 {
+        0
+    }
+    fn set_grant_sync(&mut self, sets: &std::collections::BTreeMap<u64, super::grant::SyncSet>) {
+        let seen = sets.iter().map(|(x, s)| (*x, s.ids().to_vec())).collect();
+        self.0.lock().unwrap().push(seen);
+    }
+}
+
+#[test]
+fn a_cleared_admission_clears_the_sync_sets() {
+    crate::log::mute();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut c = Config::new();
+    c.keys = ring();
+    c.games = vec![std::sync::Arc::new(SyncSpy(seen.clone()))];
+    c.public_socket = true;
+    let mut s = Server::new(c, 1, 0);
+    s.connect(CONN);
+    let mut io = NoIo;
+    let r = s.request(
+        &mut io,
+        0,
+        CONN,
+        &json!({"id": 1, "op": "hello", "proto": 1, "controller": {"kind": "vm", "version": "1.0.0"}}),
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    let mut open = open_req(W1, VM);
+    open["game"] = json!("spy");
+    let r = call(&mut s, &mut io, 0, open);
+    assert_eq!(r["ok"], true, "{r}");
+    let mut ctx = context_req(W1, json!({"official": VM}));
+    ctx["world"]["game"] = json!("spy");
+    let r = call(&mut s, &mut io, 0, ctx);
+    assert_eq!(r["leaseUntilMs"], S0 + 45_000, "{r}");
+    let r = admit(
+        &mut s,
+        &mut io,
+        W1,
+        vec![punch_with(G1, r#","sync":[1,2]"#)],
+    );
+    assert_eq!(r["admitted"], 1, "{r}");
+    assert_eq!(seen.lock().unwrap().last(), Some(&vec![(J1, vec![1, 2])]));
+    let r = call(
+        &mut s,
+        &mut io,
+        30,
+        json!({"id": 5, "op": "world.admission.end", "worldId": W1, "reason": "pause"}),
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(
+        seen.lock().unwrap().last(),
+        Some(&Vec::new()),
+        "fail closed"
+    );
+}
+
+/// Contract §3.2 (9739cc6e): a duplicate JSON key anywhere in the claims refuses the whole grant,
+/// at the top level and nested (inside `relay`); a malformed `sync` still reads as empty.
+#[test]
+fn a_duplicate_key_at_any_depth_refuses_the_grant() {
+    let ctx = |host: &'static str, role: &'static str| Context {
+        world: W1,
+        host_xuid: host,
+        peer_xuid: "1000000000000102",
+        role,
+        grant: Some(G1),
+    };
+    let verify = |claims: &str, c: Context| {
+        let (cl, s) = sign(claims);
+        grant::verify(&cl, &s, &ring(), NOW, c).map(|v| v.0)
+    };
+    // the top level: `tier` twice, same value
+    let top = claims(G1, W1, &official_host(), r#","tier":"free""#);
+    assert_eq!(
+        verify(&top, ctx("official:sao-1", "joiner")).unwrap_err(),
+        Failure::Invalid
+    );
+    // nested inside `relay` (a player host's grant): `port` twice
+    let key = encode_base64(&[3u8; 32]);
+    let player = format!(r#"{{"xuid":"{HOST_XUID}"}}"#);
+    let relay = |extra: &str| {
+        format!(
+            r#","relay":{{"key":"{key}","addr":"relay.example.test","binding":5101,"port":3478{extra}}}"#
+        )
+    };
+    let fine = claims(G1, W1, &player, &relay(""));
+    assert!(verify(&fine, ctx("1000000000000101", "host")).is_ok());
+    let nested = claims(G1, W1, &player, &relay(r#","port":3478"#));
+    assert_eq!(
+        verify(&nested, ctx("1000000000000101", "host")).unwrap_err(),
+        Failure::Invalid
+    );
+    // a duplicate `sync` is a duplicate key (refused), unlike a malformed one (empty)
+    let twice = claims(G1, W1, &official_host(), r#","sync":[1],"sync":[1]"#);
+    assert_eq!(
+        verify(&twice, ctx("official:sao-1", "joiner")).unwrap_err(),
+        Failure::Invalid
+    );
+    let malformed = claims(G1, W1, &official_host(), r#","sync":[2,1]"#);
+    assert!(
+        verify(&malformed, ctx("official:sao-1", "joiner"))
+            .unwrap()
+            .sync
+            .is_empty()
+    );
+}
