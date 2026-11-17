@@ -15,7 +15,9 @@
 use crate::b64;
 use crate::keys::{KeyError, SigningKeys};
 use ed25519_dalek::{Signature, Signer, VerifyingKey};
-use fi_protocol::matchmaking::{GRANT_TTL_SECS, RELAY_GRANT_PREFIX, RelayGrant, RelayGrantClaims};
+use fi_protocol::matchmaking::{
+    GRANT_TTL_SECS, RELAY_GRANT_PREFIX, RelayGrant, RelayGrantClaims, SYNC_MAX,
+};
 
 /// Accepted clock difference for `iat` in the future.
 pub const SKEW_SECS: i64 = 30;
@@ -118,6 +120,7 @@ pub fn sign(keys: &SigningKeys, mut claims: RelayGrantClaims) -> Result<RelayGra
     if claims.exp <= claims.iat
         || claims.exp - claims.iat > GRANT_TTL_SECS
         || !matches!(claims.role.as_str(), "joiner" | "host")
+        || !sync_canonical(claims.sync.as_deref())
     {
         return Err(GrantError::Bounds);
     }
@@ -132,6 +135,14 @@ pub fn sign(keys: &SigningKeys, mut claims: RelayGrantClaims) -> Result<RelayGra
         claims: b64::std_encode(&bytes),
         signature: b64::std_encode(&signature.to_bytes()),
         udp_proof: None,
+    })
+}
+
+/// A `sync` the signer may emit (CR-L53, MATCHMAKING_API.md §5f): absent, empty (omitted), or
+/// strictly ascending ids in 1..=255, at most [`SYNC_MAX`].
+fn sync_canonical(sync: Option<&[u8]>) -> bool {
+    sync.is_none_or(|ids| {
+        ids.len() <= SYNC_MAX && !ids.contains(&0) && ids.windows(2).all(|w| w[0] < w[1])
     })
 }
 
@@ -201,6 +212,7 @@ mod tests {
             iat,
             exp,
             relay: None,
+            sync: None,
             voice_blocked_until: None,
         }
     }
@@ -234,6 +246,48 @@ mod tests {
             sign(&keys, claims(NOW, NOW)).err(),
             Some(GrantError::Bounds)
         );
+    }
+
+    /// CR-L53 (MATCHMAKING_API.md §3.2, §5f): the signer emits only a canonical `sync`, the
+    /// verifier reads it back; a duplicate key anywhere, validly signed, refuses the grant.
+    #[test]
+    fn the_sync_claim_and_duplicate_keys() {
+        let keys = ring(&[("rg-1", 4)]);
+        let public = PublicKeys::of(&keys);
+        let mut c = claims(NOW, NOW + 60);
+        c.sync = Some(vec![1, 2]);
+        let grant = sign(&keys, c).unwrap();
+        assert_eq!(verify(&public, &grant, NOW).unwrap().sync, Some(vec![1, 2]));
+        for bad in [vec![2, 1], vec![1, 1], vec![0], (1..=9).collect()] {
+            let mut c = claims(NOW, NOW + 60);
+            c.sync = Some(bad.clone());
+            assert_eq!(sign(&keys, c).err(), Some(GrantError::Bounds), "{bad:?}");
+        }
+        let mut empty = claims(NOW, NOW + 60);
+        empty.sync = Some(vec![]);
+        let a = sign(&keys, empty).unwrap();
+        let b = sign(&keys, claims(NOW, NOW + 60)).unwrap();
+        assert_eq!(a.claims, b.claims, "an empty set keeps the bytes unchanged");
+        let text = String::from_utf8(b64::std_decode(&b.claims).unwrap()).unwrap();
+        let (kid, key) = keys.current();
+        assert_eq!(kid, "rg-1");
+        for dup in [
+            text.replace(r#""exp":"#, r#""sync":[1],"sync":[1],"exp":"#),
+            text.replace(r#""role":"joiner""#, r#""role":"joiner","role":"joiner""#),
+        ] {
+            let mut message = RELAY_GRANT_PREFIX.to_vec();
+            message.extend_from_slice(dup.as_bytes());
+            let signed = RelayGrant {
+                claims: b64::std_encode(dup.as_bytes()),
+                signature: b64::std_encode(&key.sign(&message).to_bytes()),
+                udp_proof: None,
+            };
+            assert_eq!(
+                verify(&public, &signed, NOW),
+                Err(GrantError::Invalid),
+                "{dup}"
+            );
+        }
     }
 
     #[test]
