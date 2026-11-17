@@ -1,21 +1,20 @@
 //! The car-state sync-id registry (CR-L53, OD-248; MATCHMAKING_API.md §5f): data, never per-mod
-//! code. Each entry binds one sync id (1..=255, never reused) to one declared `ModEntry.id` (the
-//! ExtraOptions `mod.json` id the launcher sends, §2.7). A seat's grant carries `sync`, the ids of
+//! code ([`REGISTRY`], a table here since server/ ships only code and the published tables;
+//! nothing branches on a mod id). Each row binds one sync id (1..=255, never reused) to one
+//! declared `ModEntry.id` (the ExtraOptions `mod.json` id the launcher sends, §2.7). A seat's grant carries `sync`, the ids of
 //! its declared set, and the host's announce answer `hostSync`, the ids of the world's set.
 
 use fi_protocol::matchmaking::{ModEntry, SYNC_MAX};
-use serde::Deserialize;
 use std::sync::LazyLock;
 
-/// The registry as shipped (`data/sync_registry.json`).
-const REGISTRY_JSON: &str = include_str!("../data/sync_registry.json");
+/// The registry as shipped: (sync id, declared `ModEntry.id`). Ids are never reused; an
+/// incompatible blob layout takes a new id (§5f).
+pub const REGISTRY: &[(u8, &str)] = &[(1, "underglow"), (2, "fh2-anna")];
 
 /// One registry row.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
     sync: u8,
-    #[serde(rename = "mod")]
     mod_id: String,
 }
 
@@ -25,15 +24,20 @@ pub struct SyncRegistry {
     entries: Vec<Entry>,
 }
 
-/// Why a registry text is refused.
+/// Why registry rows are refused.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RegistryError(pub String);
 
 impl SyncRegistry {
-    /// Parses and validates a registry text.
-    pub fn parse(text: &str) -> Result<Self, RegistryError> {
-        let entries: Vec<Entry> =
-            serde_json::from_str(text).map_err(|e| RegistryError(e.to_string()))?;
+    /// Validates registry rows.
+    pub fn new(rows: &[(u8, &str)]) -> Result<Self, RegistryError> {
+        let entries: Vec<Entry> = rows
+            .iter()
+            .map(|(sync, id)| Entry {
+                sync: *sync,
+                mod_id: (*id).to_owned(),
+            })
+            .collect();
         if entries.len() > SYNC_MAX {
             return Err(RegistryError(format!("at most {SYNC_MAX} entries")));
         }
@@ -57,7 +61,7 @@ impl SyncRegistry {
     /// The shipped registry (validated by this crate's tests; [`crate::routes`] reads it).
     pub fn builtin() -> &'static Self {
         static BUILTIN: LazyLock<SyncRegistry> = LazyLock::new(|| {
-            SyncRegistry::parse(REGISTRY_JSON).unwrap_or_else(|e| {
+            SyncRegistry::new(REGISTRY).unwrap_or_else(|e| {
                 // Unreachable once the tests pass; fail closed (no sync) rather than abort.
                 tracing::error!(error = %e.0, "sync registry invalid: no car-state sync");
                 SyncRegistry {
@@ -98,7 +102,7 @@ mod tests {
 
     #[test]
     fn the_shipped_registry_is_underglow_1_and_anna_2() {
-        let r = SyncRegistry::parse(REGISTRY_JSON).unwrap();
+        let r = SyncRegistry::new(REGISTRY).unwrap();
         assert_eq!(&r, SyncRegistry::builtin());
         assert_eq!(r.ids(&[entry("underglow")]), Some(vec![1]));
         assert_eq!(r.ids(&[entry("fh2-anna")]), Some(vec![2]));
@@ -112,18 +116,21 @@ mod tests {
 
     #[test]
     fn a_bad_registry_is_refused() {
-        for bad in [
-            r#"[{"sync":0,"mod":"a"}]"#,
-            r#"[{"sync":256,"mod":"a"}]"#,
-            r#"[{"sync":1,"mod":""}]"#,
-            r#"[{"sync":1,"mod":"a"},{"sync":1,"mod":"b"}]"#,
-            r#"[{"sync":1,"mod":"a"},{"sync":2,"mod":"a"}]"#,
-            r#"[{"sync":1,"mod":"a","x":1}]"#,
-            r#"[{"sync":1,"mod":"a"},{"sync":2,"mod":"b"},{"sync":3,"mod":"c"},{"sync":4,"mod":"d"},{"sync":5,"mod":"e"},{"sync":6,"mod":"f"},{"sync":7,"mod":"g"},{"sync":8,"mod":"h"},{"sync":9,"mod":"i"}]"#,
-            "{}",
-        ] {
-            assert!(SyncRegistry::parse(bad).is_err(), "{bad}");
+        let nine: Vec<(u8, String)> = (1..=9).map(|i| (i, format!("m{i}"))).collect();
+        let nine: Vec<(u8, &str)> = nine.iter().map(|(i, m)| (*i, m.as_str())).collect();
+        let long = "a".repeat(65);
+        let bad: [&[(u8, &str)]; 6] = [
+            &[(0, "a")],
+            &[(1, "")],
+            &[(1, &long)],
+            &[(1, "a"), (1, "b")],
+            &[(1, "a"), (2, "a")],
+            &nine,
+        ];
+        for rows in bad {
+            assert!(SyncRegistry::new(rows).is_err(), "{rows:?}");
         }
-        assert!(SyncRegistry::parse("[]").is_ok());
+        assert!(SyncRegistry::new(&[]).is_ok());
+        assert!(SyncRegistry::new(&nine[..8]).is_ok());
     }
 }
