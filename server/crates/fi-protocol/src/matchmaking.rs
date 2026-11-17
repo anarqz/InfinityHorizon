@@ -2058,7 +2058,7 @@ mod tests {
     }
 
     /// CR-L53 (§5f): any other shape of `sync` reads as no sync (fail closed, never a refusal),
-    /// as WINDOWS' `core/grant.rs` and `RelayGrantVerifier` read it.
+    /// as the client verifiers (`native/worlds` `core/grant.rs`, `RelayGrantVerifier`) read it.
     #[test]
     fn a_malformed_sync_reads_as_no_sync() {
         let read = |sync: &str| {
