@@ -1809,6 +1809,8 @@ pub struct PunchRow {
     pub transport: String,
     /// The joiner's account's voice block in force (CR-S67), signed into the grant.
     pub voice_blocked_until: Option<UnixMs>,
+    /// The seat's declared set (`mm_grant.mods`; CR-L53 signs its sync ids).
+    pub mods: Vec<ModEntry>,
 }
 
 /// An authorized routing hint. Debug never contains its address or port.
@@ -2126,9 +2128,11 @@ struct GrantRow {
     relay_key: Option<String>,
     transport: String,
     missing_since: Option<UnixMs>,
+    /// The seat's declared set (`mm_grant.mods`, OD-112; CR-L53 signs its sync ids).
+    mods: Vec<ModEntry>,
 }
 
-const GRANT_COLUMNS: &str = "id, world_id, profile_id, account_id, xuid, tier, state, issued_at, expires_at, hold_until, announced, session_id, udp_proof_key, relay_key, transport, missing_since";
+const GRANT_COLUMNS: &str = "id, world_id, profile_id, account_id, xuid, tier, state, issued_at, expires_at, hold_until, announced, session_id, udp_proof_key, relay_key, transport, missing_since, mods";
 
 fn grant_row(r: &sqlx::postgres::PgRow) -> Result<GrantRow, sqlx::Error> {
     Ok(GrantRow {
@@ -2146,6 +2150,7 @@ fn grant_row(r: &sqlx::postgres::PgRow) -> Result<GrantRow, sqlx::Error> {
         missing_since: r
             .try_get::<Option<OffsetDateTime>, _>("missing_since")?
             .map(ms),
+        mods: mods_from_json(r.try_get("mods")?),
     })
 }
 
@@ -3709,6 +3714,7 @@ pub async fn official_quick_join(
                         relay_key: g.relay_key,
                         transport: g.transport,
                         voice_blocked_until,
+                        mods: g.mods,
                     }));
                 }
                 // OD-190: the quick join leaves whatever the caller was in.
@@ -3757,6 +3763,7 @@ pub async fn official_quick_join(
             relay_key: None,
             transport: "direct".to_owned(),
             voice_blocked_until,
+            mods: input.mods.entries.clone(),
         }));
     }
     // Rolled back: the caller's old seat stays; the service waits for the agent (CR-S100).
@@ -4213,6 +4220,7 @@ pub async fn official_private_create(
             relay_key: g.relay_key,
             transport: g.transport,
             voice_blocked_until,
+            mods: g.mods,
         }));
     }
     // Its own open world, as any new seat: a kick, its mode and its seats still decide (rolled back).
@@ -4272,6 +4280,7 @@ pub async fn official_private_create(
         relay_key: None,
         transport: "direct".to_owned(),
         voice_blocked_until,
+        mods: input.mods.entries.clone(),
     }))
 }
 
@@ -4513,7 +4522,7 @@ pub async fn set_private_modes(
 /// [`KICKED_VISIBLE_SECS`]. `$3` is the host session and `$4` its current mode; the world and
 /// its hosting session are rechecked in the same statement that reads credentials.
 pub const PUNCHES_SQL: &str = "SELECT g.id, g.world_id, g.profile_id, g.xuid, g.tier, g.state, g.issued_at, g.expires_at, \
-     g.relay_key, g.transport, \
+     g.relay_key, g.transport, g.mods, \
      (SELECT CASE WHEN greatest(va.voice_banned_until, va.voice_community_until) > clock_timestamp() \
            THEN greatest(va.voice_banned_until, va.voice_community_until) END \
          FROM account va WHERE va.id = g.account_id) AS voice_blocked_until, \
@@ -4575,6 +4584,7 @@ fn punch_row(r: &sqlx::postgres::PgRow) -> Result<PunchRow, sqlx::Error> {
         voice_blocked_until: r
             .try_get::<Option<OffsetDateTime>, _>("voice_blocked_until")?
             .map(ms),
+        mods: mods_from_json(r.try_get("mods")?),
     })
 }
 
@@ -4831,6 +4841,8 @@ pub struct GrantIssued {
     pub transport: String,
     /// The joiner's account's voice block in force (CR-S67), signed into the grant.
     pub voice_blocked_until: Option<UnixMs>,
+    /// The seat's declared set (`mm_grant.mods`; CR-L53 signs its sync ids).
+    pub mods: Vec<ModEntry>,
 }
 
 /// `not_allowed` reasons.
@@ -5033,6 +5045,26 @@ async fn insert_grant_in(
     Ok((id, ms(issued), ms(expires), ms(until), udp_proof_key))
 }
 
+/// The declared set of the caller's play session's most recent grant (`mm_grant.mods`; vanilla
+/// when it has none), for free roam's automatic step (MATCHMAKING_API.md §4a step 3, OD-248
+/// answer 1, CR-L53): the ticket carries no set, so its seat copies the session's latest one. A
+/// stored set that no longer validates reads as vanilla. Display and §5f `sync` only: mods
+/// never choose the world (OD-235).
+pub async fn latest_session_mods(db: &PgPool, caller: &Caller) -> Result<ModSet, MmError> {
+    let mods: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT mods FROM mm_grant WHERE account_id = $1 AND profile_id = $2 AND game = $3 \
+           AND session_id = $4 ORDER BY issued_at DESC, id DESC LIMIT 1",
+    )
+    .bind(caller.account_id)
+    .bind(caller.profile_id)
+    .bind(&caller.game)
+    .bind(caller.session_id)
+    .fetch_optional(db)
+    .await?;
+    let entries = mods.map(mods_from_json).unwrap_or_default();
+    Ok(mod_set(Some(&entries)).unwrap_or_default())
+}
+
 /// `POST /mm/v1/join` in one transaction (MATCHMAKING_API.md §3.1 for the order). A live invite of
 /// the caller's account passes `friends` and `code`; the first grant through it, or with the
 /// caller's own pending request, ends those `accepted`.
@@ -5150,6 +5182,7 @@ pub async fn join_with_relay(
                 relay_key: g.relay_key,
                 transport: g.transport,
                 voice_blocked_until,
+                mods: g.mods,
             }));
         }
         tx.commit().await?;
@@ -5351,6 +5384,7 @@ pub async fn join_with_relay(
         relay_key: pair.key,
         transport: pair.transport.to_owned(),
         voice_blocked_until,
+        mods: input.mods.entries.clone(),
     }))
 }
 
@@ -5485,9 +5519,14 @@ pub struct SeatGrant {
     pub transport: String,
     /// The caller's account's voice block in force (CR-S67), signed into the grant.
     pub voice_blocked_until: Option<UnixMs>,
+    /// The seat's declared set (`mm_grant.mods`; CR-L53 signs its sync ids).
+    pub mods: Vec<ModEntry>,
 }
 
 /// The caller's seat now.
+// One per seat read; the grant stays unboxed (CR-L53 added its declared set) so callers keep
+// matching it by value.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SeatNow {
     /// It hosts this world.
@@ -5590,7 +5629,7 @@ async fn seat_in(
         });
     }
     let live = sqlx::query(
-        "SELECT g.id, g.state, g.world_id, g.expires_at, g.hold_until, g.udp_proof_key, g.relay_key, g.transport, coalesce(p.xuid, 0) AS host_xuid, w.host_vm_id, \
+        "SELECT g.id, g.state, g.world_id, g.expires_at, g.hold_until, g.udp_proof_key, g.relay_key, g.transport, g.mods, coalesce(p.xuid, 0) AS host_xuid, w.host_vm_id, \
            (SELECT CASE WHEN greatest(va.voice_banned_until, va.voice_community_until) > clock_timestamp() \
                THEN greatest(va.voice_banned_until, va.voice_community_until) END \
              FROM account va WHERE va.id = g.account_id) AS voice_blocked_until \
@@ -5631,6 +5670,7 @@ async fn seat_in(
                 voice_blocked_until: r
                     .try_get::<Option<OffsetDateTime>, _>("voice_blocked_until")?
                     .map(ms),
+                mods: mods_from_json(r.try_get("mods")?),
             };
             // CR-S96: only here, to a reader seated in the world.
             let (private_leader, private_session) = if w.private {
@@ -6877,6 +6917,7 @@ pub async fn accept_request_with_relay(
             relay_key: pair.key,
             transport: pair.transport.to_owned(),
             voice_blocked_until: asker_voice,
+            mods: asker_mods.entries.clone(),
         },
     })
 }
@@ -7361,6 +7402,7 @@ mod tests {
             relay_key: None,
             transport: "direct".into(),
             voice_blocked_until: None,
+            mods: Vec::new(),
         };
         let text = format!("{:?}", JoinOutcome::Granted(grant));
         assert!(text.contains("[REDACTED]"));

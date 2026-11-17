@@ -2037,6 +2037,93 @@ async fn a_car_meet_invite_session_is_the_hosts_and_its_members_join_it() {
         .unwrap();
 }
 
+/// MATCHMAKING_API.md §4a step 3 (OD-248 answer 1, CR-L53): the ticket carries no set, so the
+/// seat the automatic step takes stores the `mods` of the same play session's most recent grant
+/// (`[]` when none); mods never choose the world.
+#[tokio::test]
+#[ignore = "needs Postgres: FI_TEST_DATABASE_URL"]
+async fn the_automatic_choice_copies_the_sessions_latest_declared_set() {
+    let pg = pg().await;
+    let auto = Settings {
+        auto: true,
+        fallback: None,
+    };
+    let ticket = |name: &str| json!({"ticketSessionRef": {"name": name, "scid": SCID, "templateName": TEMPLATE}});
+    let first_host = pg.player("free", "203.0.113.40").await;
+    let first = pg.host(&first_host, &[], vec![]).await;
+    let player = pg.player("free", "198.51.100.40").await;
+    let underglow = fi_db::matchmaking::ModEntry {
+        id: "underglow".into(),
+        version: "1.0".into(),
+        fingerprint: "a".repeat(64),
+    };
+    let declared = matchmaking::mod_set(Some(std::slice::from_ref(&underglow))).unwrap();
+    let out = matchmaking::join(
+        &pg.state.pool,
+        &pg.mm(&player),
+        &JoinInput {
+            world_id: Some(first),
+            code: None,
+            ip: Some(player.ip.to_string()),
+            cell: None,
+            hold_secs: matchmaking::DEFAULT_SEAT_HOLD_SECS,
+            mods: declared.clone(),
+            activity: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out, JoinOutcome::Granted(_)), "{out:?}");
+    assert_eq!(
+        matchmaking::latest_session_mods(&pg.state.pool, &pg.mm(&player))
+            .await
+            .unwrap(),
+        declared
+    );
+    matchmaking::close_world(&pg.state.pool, &pg.mm(&first_host), first)
+        .await
+        .unwrap();
+    let second_host = pg.player("free", "203.0.113.41").await;
+    let second = pg.host(&second_host, &[], vec![]).await;
+    let live_mods = |p: Uuid| {
+        sqlx::query_as::<_, (Uuid, Value)>(
+            "SELECT world_id, mods FROM mm_grant WHERE profile_id = $1 AND state IN ('issued', 'used')",
+        )
+        .bind(p)
+        .fetch_one(&pg.state.pool)
+    };
+    for (p, session, expected) in [
+        (&player, "m-t", json!([underglow])),
+        (&pg.player("free", "198.51.100.41").await, "v-t", json!([])),
+    ] {
+        pg.call_with(
+            &auto,
+            p,
+            Method::PUT,
+            SESSIONDIRECTORY,
+            &session_path(session),
+            json!({}),
+        )
+        .await;
+        let a = pg
+            .call_with(
+                &auto,
+                p,
+                Method::POST,
+                MOMATCH,
+                &hopper_path("FreeRoam_qos"),
+                ticket(session),
+            )
+            .await;
+        assert_eq!(a.status, StatusCode::OK, "{}", a.json);
+        let (world, mods) = live_mods(p.ticket.live.profile_id).await.unwrap();
+        assert_eq!((world, mods), (second, expected));
+    }
+    matchmaking::close_world(&pg.state.pool, &pg.mm(&second_host), second)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 #[ignore = "needs Postgres: FI_TEST_DATABASE_URL"]
 async fn the_automatic_choice_follows_matchmaking_and_takes_a_grant() {

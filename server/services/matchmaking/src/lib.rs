@@ -20,6 +20,7 @@ pub mod config;
 pub mod official;
 pub mod relay;
 pub mod routes;
+pub mod sync;
 
 use axum::extract::Request;
 use axum::http::HeaderValue;

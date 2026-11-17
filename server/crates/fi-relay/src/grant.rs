@@ -186,15 +186,21 @@ pub(crate) mod testing {
             iat: now,
             exp: now + 60,
             relay: None,
+            sync: None,
             voice_blocked_until: None,
         }
     }
 
     pub fn sign(seed: u8, claims: &RelayGrantClaims) -> (Vec<u8>, [u8; 64]) {
-        let bytes = serde_json::to_vec(claims).unwrap();
+        sign_bytes(seed, serde_json::to_vec(claims).unwrap())
+    }
+
+    /// Signs raw claims bytes (shapes the signer never emits).
+    pub fn sign_bytes(seed: u8, bytes: Vec<u8>) -> (Vec<u8>, [u8; 64]) {
         let mut message = RELAY_GRANT_PREFIX.to_vec();
         message.extend_from_slice(&bytes);
-        (bytes, key(seed).sign(&message).to_bytes())
+        let sig = key(seed).sign(&message).to_bytes();
+        (bytes, sig)
     }
 }
 
@@ -241,6 +247,45 @@ mod tests {
             official.host = fi_protocol::matchmaking::RelayGrantHost::Official("local-mac".into());
             let (b, s) = sign(7, &official);
             assert_eq!(keys.verify_raw(&b, &s, NOW), Err(GrantError::Invalid));
+        }
+    }
+
+    /// CR-L53 (MATCHMAKING_API.md §3.2, §5f): `sync` verifies; a malformed one reads as no
+    /// sync; a duplicate key anywhere, validly signed, refuses the grant.
+    #[test]
+    fn the_sync_claim_and_duplicate_keys() {
+        let keys = keys(7);
+        let mut c = claims("g", NOW);
+        c.sync = Some(vec![1, 2]);
+        let (bytes, sig) = sign(7, &c);
+        assert!(String::from_utf8_lossy(&bytes).contains(r#","sync":[1,2]}"#));
+        assert_eq!(keys.verify_raw(&bytes, &sig, NOW).unwrap(), c);
+        let text = String::from_utf8(sign(7, &claims("g", NOW)).0).unwrap();
+        let body = text.strip_suffix('}').unwrap();
+        for (sync, read) in [
+            ("[2,1]", None),
+            ("[0]", None),
+            ("[]", None),
+            ("[3]", Some(vec![3])),
+        ] {
+            let (b, s) = sign_bytes(7, format!(r#"{body},"sync":{sync}}}"#).into_bytes());
+            assert_eq!(keys.verify_raw(&b, &s, NOW).unwrap().sync, read, "{sync}");
+        }
+        for dup in [
+            format!(r#"{body},"sync":[1],"sync":[1]}}"#),
+            format!(r#"{body},"sync":[{{"a":1,"a":1}}]}}"#),
+            format!(r#"{body},"kid":"rg-1"}}"#),
+            text.replace(
+                r#""host":{"xuid":"2535100000000001"}"#,
+                r#""host":{"xuid":"2535100000000001","xuid":"2535100000000001"}"#,
+            ),
+        ] {
+            let (b, s) = sign_bytes(7, dup.clone().into_bytes());
+            assert_eq!(
+                keys.verify_raw(&b, &s, NOW),
+                Err(GrantError::Invalid),
+                "{dup}"
+            );
         }
     }
 

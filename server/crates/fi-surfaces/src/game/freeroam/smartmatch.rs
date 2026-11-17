@@ -124,19 +124,26 @@ async fn route_for_ticket(
     let Some(world) = r.world_id else {
         return Ok(None);
     };
+    let mm = caller.mm();
+    // The game's ticket carries no mod set: the seat takes the play session's most recent
+    // declared one (MATCHMAKING_API.md §4a step 3, OD-248 answer 1, CR-L53; vanilla when none),
+    // for display and §5f `sync` only. Mods never decide the world (T-1110-NOMODMATCH, OD-235).
+    let mods = match matchmaking::latest_session_mods(&state.pool, &mm).await {
+        Ok(mods) => mods,
+        Err(MmError::Db(e)) => return Err(e.into()),
+        Err(_) => matchmaking::ModSet::vanilla(),
+    };
     let input = matchmaking::JoinInput {
         world_id: Some(world),
         code: None,
         ip: caller.ip.map(|ip| ip.to_string()),
         cell: None,
         hold_secs: matchmaking::DEFAULT_SEAT_HOLD_SECS,
-        // The game's ticket carries no mod set: the seat shows none. Mods never decide the world
-        // (T-1110-NOMODMATCH).
-        mods: matchmaking::ModSet::vanilla(),
+        mods,
         // OD-150: the automatic step takes free-roam worlds only.
         activity: Some("freeroam".into()),
     };
-    let granted = match matchmaking::join(&state.pool, &caller.mm(), &input).await {
+    let granted = match matchmaking::join(&state.pool, &mm, &input).await {
         Ok(JoinOutcome::Granted(_)) => true,
         Ok(_) | Err(MmError::WorldNotFound) => false,
         Err(MmError::Db(e)) => return Err(e.into()),

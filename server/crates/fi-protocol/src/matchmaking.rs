@@ -73,6 +73,9 @@ pub const MAX_PENDING: u32 = 4;
 pub const MODS_MAX: usize = 100;
 /// Signed prefix of a relay grant.
 pub const RELAY_GRANT_PREFIX: &[u8] = b"fi-relay-grant-v1\n";
+/// The most car-state sync ids a grant's `sync` or a world's `hostSync` carries (CR-L53,
+/// MATCHMAKING_API.md §5f).
+pub const SYNC_MAX: usize = 8;
 
 /// A world code as sent (8 digits, with an optional hyphen after the fourth) as its 8 digits;
 /// `None` for anything else.
@@ -377,7 +380,9 @@ pub type RelayLatencies = std::collections::BTreeMap<String, u32>;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModEntry {
-    /// The manifest's multiplayer `compatibilityId` (`^[a-z0-9][a-z0-9._-]{0,63}$`).
+    /// The declared id: the ExtraOptions `mod.json` `"id"` the launcher sends
+    /// (`^[a-z0-9][a-z0-9._-]{0,63}$`; MATCHMAKING_API.md §5f, CR-L53), the key of the car-state
+    /// sync registry. Not the manifest's `compatibilityId`.
     pub id: String,
     /// Its revision as text (1 to 16 of `[0-9A-Za-z._+-]`; display only, part of the key).
     pub version: String,
@@ -743,6 +748,17 @@ pub struct WorldAnnounced {
     pub world: WorldView,
     /// Same as `GET /mm/v1/punches`.
     pub punches: Vec<Punch>,
+    /// The host's car-state sync ids (CR-L53, MATCHMAKING_API.md §5f): the registry ids of the
+    /// world's declared `mods`, the rules of [`RelayGrantClaims::sync`]; the launcher passes them
+    /// as `world.context` `world.hostSync` (DEDICATED_SERVER.md §4.3). Omitted when empty and
+    /// always for an official world (no host player).
+    #[serde(
+        rename = "hostSync",
+        default,
+        skip_serializing_if = "sync_is_empty",
+        deserialize_with = "lenient_sync"
+    )]
+    pub host_sync: Option<Vec<u8>>,
 }
 
 /// `POST /mm/v1/worlds/{worldId}/moderation` body.
@@ -842,6 +858,17 @@ pub struct RelayGrantClaims {
     /// when the grant names none (a direct-only grant's bytes are unchanged).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<RelayGrantRelay>,
+    /// The seat's car-state sync ids (CR-L53, MATCHMAKING_API.md §5f): the registry ids of the
+    /// seat's declared mods, ascending, unique, at most [`SYNC_MAX`], each in 1..=255. After
+    /// `relay`, before `voiceBlockedUntil`; omitted when `None` or empty (other grants' bytes are
+    /// unchanged). Read leniently ([`sync_ids`]): any other shape is no sync (fail closed, never a
+    /// refusal), but a duplicate JSON member inside it still refuses the grant.
+    #[serde(
+        default,
+        skip_serializing_if = "sync_is_empty",
+        deserialize_with = "lenient_sync"
+    )]
+    pub sync: Option<Vec<u8>>,
     /// The joiner account's voice block in force at signing, Unix seconds (CR-S67,
     /// MATCHMAKING_API.md §3.2): the later of a moderator voice ban and a community mute. The
     /// last claim, omitted when no block is in force (other grants' bytes are unchanged).
@@ -851,6 +878,98 @@ pub struct RelayGrantClaims {
         skip_serializing_if = "Option::is_none"
     )]
     pub voice_blocked_until: Option<i64>,
+}
+
+/// Whether a `sync` claim or `hostSync` list is absent (`None` or empty: no sync).
+pub fn sync_is_empty(sync: &Option<Vec<u8>>) -> bool {
+    sync.as_ref().is_none_or(Vec::is_empty)
+}
+
+/// The canonical form of a sync id list (CR-L53, MATCHMAKING_API.md §5f): a JSON array of at
+/// most [`SYNC_MAX`] integers in 1..=255, strictly ascending. `None` for anything else, and for
+/// the empty list (no sync).
+pub fn sync_ids(value: &serde_json::Value) -> Option<Vec<u8>> {
+    let items = value.as_array()?;
+    if items.is_empty() || items.len() > SYNC_MAX {
+        return None;
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(items.len());
+    for item in items {
+        let id = u8::try_from(item.as_u64()?).ok().filter(|id| *id != 0)?;
+        if out.last().is_some_and(|last| *last >= id) {
+            return None;
+        }
+        out.push(id);
+    }
+    Some(out)
+}
+
+/// A JSON value read with duplicate object members refused at any depth (MATCHMAKING_API.md
+/// §3.2: a duplicate key anywhere in the claims refuses the grant).
+struct NoDuplicates(serde_json::Value);
+
+impl<'de> Deserialize<'de> for NoDuplicates {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(NoDuplicatesVisitor)
+    }
+}
+
+struct NoDuplicatesVisitor;
+
+impl<'de> serde::de::Visitor<'de> for NoDuplicatesVisitor {
+    type Value = NoDuplicates;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("JSON")
+    }
+    fn visit_bool<E>(self, v: bool) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::Bool(v)))
+    }
+    fn visit_i64<E>(self, v: i64) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::from(v)))
+    }
+    fn visit_u64<E>(self, v: u64) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::from(v)))
+    }
+    fn visit_f64<E>(self, v: f64) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::from(v)))
+    }
+    fn visit_str<E>(self, v: &str) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::String(v.to_owned())))
+    }
+    fn visit_unit<E>(self) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::Null))
+    }
+    fn visit_none<E>(self) -> Result<NoDuplicates, E> {
+        Ok(NoDuplicates(serde_json::Value::Null))
+    }
+    fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<NoDuplicates, D::Error> {
+        NoDuplicates::deserialize(d)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<NoDuplicates, A::Error> {
+        let mut out = Vec::new();
+        while let Some(NoDuplicates(v)) = seq.next_element()? {
+            out.push(v);
+        }
+        Ok(NoDuplicates(serde_json::Value::Array(out)))
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<NoDuplicates, A::Error> {
+        let mut out = serde_json::Map::new();
+        while let Some(k) = map.next_key::<String>()? {
+            let NoDuplicates(v) = map.next_value()?;
+            if out.insert(k, v).is_some() {
+                return Err(serde::de::Error::custom("duplicate member"));
+            }
+        }
+        Ok(NoDuplicates(serde_json::Value::Object(out)))
+    }
+}
+
+/// `sync` as read by every verifier (CR-L53, MATCHMAKING_API.md §5f): the canonical list, else
+/// `None` (no sync, never a refusal); a duplicate member inside the value refuses the grant.
+fn lenient_sync<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+    let NoDuplicates(value) = NoDuplicates::deserialize(d)?;
+    Ok(sync_ids(&value))
 }
 
 /// The relay part of [`RelayGrantClaims`] (CR-S57).
@@ -1722,8 +1841,33 @@ mod tests {
         let json = serde_json::to_value(WorldAnnounced {
             world: view(),
             punches: vec![punch()],
+            host_sync: None,
         })
         .unwrap();
+        assert!(
+            json.get("hostSync").is_none(),
+            "omitted without sync (CR-L53)"
+        );
+        let synced = serde_json::to_value(WorldAnnounced {
+            world: view(),
+            punches: vec![],
+            host_sync: Some(vec![1, 2]),
+        })
+        .unwrap();
+        assert_eq!(synced["hostSync"], serde_json::json!([1, 2]));
+        assert_eq!(
+            serde_json::from_value::<WorldAnnounced>(synced)
+                .unwrap()
+                .host_sync,
+            Some(vec![1, 2])
+        );
+        let empty = serde_json::to_value(WorldAnnounced {
+            world: view(),
+            punches: vec![],
+            host_sync: Some(vec![]),
+        })
+        .unwrap();
+        assert!(empty.get("hostSync").is_none(), "an empty set is omitted");
         assert_eq!(json["maxPlayers"], 12);
         assert_eq!(json["audience"], "friends");
         assert_eq!(json["code"], "12345678");
@@ -1794,6 +1938,7 @@ mod tests {
             iat: 1,
             exp: 2,
             relay: None,
+            sync: None,
             voice_blocked_until: None,
         };
         assert_eq!(
@@ -1835,6 +1980,139 @@ mod tests {
             .voice_blocked_until,
             Some(5)
         );
+    }
+
+    fn sync_claims() -> RelayGrantClaims {
+        RelayGrantClaims {
+            v: 1,
+            kid: "k".into(),
+            grant: "g".into(),
+            world: "w".into(),
+            sub: "p".into(),
+            xuid: "1".into(),
+            tier: "free".into(),
+            host: RelayGrantHost::Xuid("2".into()),
+            role: "joiner".into(),
+            iat: 1,
+            exp: 2,
+            relay: None,
+            sync: None,
+            voice_blocked_until: None,
+        }
+    }
+
+    const BASE: &str = r#"{"v":1,"kid":"k","grant":"g","world":"w","sub":"p","xuid":"1","tier":"free","host":{"xuid":"2"},"role":"joiner","iat":1,"exp":2"#;
+
+    /// CR-L53 (MATCHMAKING_API.md §3.2, §5f): `sync` sits after `relay` and before
+    /// `voiceBlockedUntil`; absent or empty, the bytes are exactly today's.
+    #[test]
+    fn the_sync_claim_is_between_relay_and_the_voice_block_and_omitted_when_empty() {
+        let plain = sync_claims();
+        let today = format!("{BASE}}}");
+        assert_eq!(serde_json::to_string(&plain).unwrap(), today);
+        let empty = RelayGrantClaims {
+            sync: Some(vec![]),
+            ..plain.clone()
+        };
+        assert_eq!(
+            serde_json::to_string(&empty).unwrap(),
+            today,
+            "an empty set keeps the bytes unchanged"
+        );
+        let synced = RelayGrantClaims {
+            sync: Some(vec![1, 2]),
+            ..plain.clone()
+        };
+        assert_eq!(
+            serde_json::to_string(&synced).unwrap(),
+            format!(r#"{BASE},"sync":[1,2]}}"#)
+        );
+        let all = RelayGrantClaims {
+            relay: Some(relay_ref()),
+            sync: Some(vec![1]),
+            voice_blocked_until: Some(9),
+            ..plain.clone()
+        };
+        assert_eq!(
+            serde_json::to_string(&all).unwrap(),
+            format!(
+                r#"{BASE},"relay":{{"key":"k","addr":"203.0.113.1","binding":3478,"port":5101}},"sync":[1],"voiceBlockedUntil":9}}"#
+            )
+        );
+        let blocked = RelayGrantClaims {
+            sync: Some(vec![2]),
+            voice_blocked_until: Some(9),
+            ..plain
+        };
+        assert_eq!(
+            serde_json::to_string(&blocked).unwrap(),
+            format!(r#"{BASE},"sync":[2],"voiceBlockedUntil":9}}"#)
+        );
+        for claims in [synced, all, blocked] {
+            let text = serde_json::to_string(&claims).unwrap();
+            assert_eq!(
+                serde_json::from_str::<RelayGrantClaims>(&text).unwrap(),
+                claims
+            );
+        }
+    }
+
+    /// CR-L53 (§5f): any other shape of `sync` reads as no sync (fail closed, never a refusal),
+    /// as the client verifiers (`native/worlds` `core/grant.rs`, `RelayGrantVerifier`) read it.
+    #[test]
+    fn a_malformed_sync_reads_as_no_sync() {
+        let read = |sync: &str| {
+            serde_json::from_str::<RelayGrantClaims>(&format!(r#"{BASE},"sync":{sync}}}"#))
+                .unwrap()
+                .sync
+        };
+        assert_eq!(
+            read("[1,2,3,4,5,6,7,8]"),
+            Some(vec![1, 2, 3, 4, 5, 6, 7, 8])
+        );
+        assert_eq!(read("[255]"), Some(vec![255]));
+        for bad in [
+            "[]",
+            "null",
+            "[0]",
+            "[256]",
+            "[-1]",
+            "[1.5]",
+            "[2,1]",
+            "[1,1]",
+            "[1,2,3,4,5,6,7,8,9]",
+            r#"["1"]"#,
+            "1",
+            r#"{"a":1}"#,
+            "[[1]]",
+        ] {
+            assert_eq!(read(bad), None, "{bad}");
+        }
+    }
+
+    /// MATCHMAKING_API.md §3.2 (CR-L53): a duplicate key anywhere in the claims refuses the whole
+    /// grant.
+    #[test]
+    fn a_duplicate_key_anywhere_refuses_the_claims() {
+        let relay = r#""relay":{"key":"k","addr":"203.0.113.1","binding":3478,"port":5101}"#;
+        assert!(serde_json::from_str::<RelayGrantClaims>(&format!("{BASE},{relay}}}")).is_ok());
+        for bad in [
+            format!(r#"{BASE},"kid":"k"}}"#),
+            format!(r#"{BASE},"sync":[1],"sync":[1]}}"#),
+            format!(r#"{BASE},"sync":[1],"sync":"x"}}"#),
+            format!(r#"{BASE},"sync":{{"a":1,"a":1}}}}"#),
+            format!(r#"{BASE},"sync":[{{"a":1,"a":2}}]}}"#),
+            format!(r#"{BASE},"voiceBlockedUntil":1,"voiceBlockedUntil":1}}"#),
+            r#"{"v":1,"kid":"k","grant":"g","world":"w","sub":"p","xuid":"1","tier":"free","host":{"xuid":"2","xuid":"2"},"role":"joiner","iat":1,"exp":2}"#.to_owned(),
+            format!(
+                r#"{BASE},"relay":{{"key":"k","key":"k","addr":"203.0.113.1","binding":3478,"port":5101}}}}"#
+            ),
+        ] {
+            assert!(
+                serde_json::from_str::<RelayGrantClaims>(&bad).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     /// OD-188/189 (MATCHMAKING_API.md §2.9): `World.host` is a player's `{xuid, gamertag, tier}`
@@ -1885,6 +2163,7 @@ mod tests {
             iat: 1_793_750_400,
             exp: 1_793_750_460,
             relay: None,
+            sync: None,
             voice_blocked_until: None,
         };
         let bytes = r#"{"v":1,"kid":"rg-1","grant":"g","world":"w","sub":"p","xuid":"2535100000000003","tier":"vip","host":{"xuid":"2535100000000004"},"role":"host","iat":1793750400,"exp":1793750460}"#;
