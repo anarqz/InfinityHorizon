@@ -885,3 +885,39 @@ fn a_duplicate_key_at_any_depth_refuses_the_grant() {
             .is_empty()
     );
 }
+
+/// CR-L53 (C# db13ec3): a `sync` nested past the claims' depth limit reads as empty and the grant
+/// verifies; the depth limit still refuses every other member, and duplicates inside `sync` are
+/// still refused.
+#[test]
+fn a_deeply_nested_sync_reads_as_empty_and_only_sync_escapes_the_depth_limit() {
+    let ctx = Context {
+        world: W1,
+        host_xuid: "official:sao-1",
+        peer_xuid: "1000000000000102",
+        role: "joiner",
+        grant: Some(G1),
+    };
+    let verify = |extra: &str| {
+        let (c, s) = sign(&claims(G1, W1, &official_host(), extra));
+        grant::verify(&c, &s, &ring(), NOW, ctx).map(|v| v.0)
+    };
+    for deep in [
+        r#","sync":[[[[[1]]]]]"#,
+        r#","sync":{"a":{"b":{"c":{"d":[1]}}}}"#,
+        r#","sync":[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]"#,
+    ] {
+        assert!(verify(deep).unwrap().sync.is_empty(), "{deep}");
+    }
+    // another member nested as deep is refused, as before
+    assert_eq!(verify(r#","x":[[[[[1]]]]]"#).unwrap_err(), Failure::Invalid);
+    assert_eq!(
+        verify(r#","voiceBlockedUntil":[[[[[0]]]]]"#).unwrap_err(),
+        Failure::Invalid
+    );
+    // a duplicate key deep inside `sync` is still a duplicate key
+    assert_eq!(
+        verify(r#","sync":[[[[{"a":1,"a":1}]]]]"#).unwrap_err(),
+        Failure::Invalid
+    );
+}

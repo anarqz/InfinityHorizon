@@ -147,7 +147,16 @@ pub struct Context<'a> {
 /// A JSON value read with duplicate members refused and a depth limit.
 struct Strict(Value);
 
-struct StrictVisitor(usize);
+/// The depth, and whether the value sits inside the top-level `sync` member (CR-L53: its value
+/// has no depth limit, since any bad shape there reads as the empty set; duplicates are still
+/// refused).
+struct StrictVisitor(usize, bool);
+
+impl StrictVisitor {
+    fn too_deep(&self) -> bool {
+        self.0 >= MAX_DEPTH && !self.1
+    }
+}
 
 impl<'de> Visitor<'de> for StrictVisitor {
     type Value = Strict;
@@ -182,23 +191,24 @@ impl<'de> Visitor<'de> for StrictVisitor {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Strict, A::Error> {
-        if self.0 >= MAX_DEPTH {
+        if self.too_deep() {
             return Err(de::Error::custom("depth"));
         }
         let mut out = Vec::new();
-        while let Some(v) = seq.next_element_seed(Depth(self.0 + 1))? {
+        while let Some(v) = seq.next_element_seed(Depth(self.0 + 1, self.1))? {
             out.push(v.0);
         }
         Ok(Strict(Value::Array(out)))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Strict, A::Error> {
-        if self.0 >= MAX_DEPTH {
+        if self.too_deep() {
             return Err(de::Error::custom("depth"));
         }
         let mut out = Map::new();
         while let Some(k) = map.next_key::<String>()? {
-            let v = map.next_value_seed(Depth(self.0 + 1))?;
+            let in_sync = self.1 || self.0 == 0 && k == "sync";
+            let v = map.next_value_seed(Depth(self.0 + 1, in_sync))?;
             if out.insert(k, v.0).is_some() {
                 return Err(de::Error::custom("duplicate member"));
             }
@@ -207,19 +217,21 @@ impl<'de> Visitor<'de> for StrictVisitor {
     }
 }
 
-struct Depth(usize);
+struct Depth(usize, bool);
 
 impl<'de> de::DeserializeSeed<'de> for Depth {
     type Value = Strict;
     fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Strict, D::Error> {
-        d.deserialize_any(StrictVisitor(self.0))
+        d.deserialize_any(StrictVisitor(self.0, self.1))
     }
 }
 
-/// Parses JSON refusing duplicate members and nesting past the claims' depth.
+/// Parses JSON refusing duplicate members at any depth and nesting past the claims' depth
+/// (except inside the top-level `sync`, whose bad shapes read as empty; serde_json's own
+/// recursion limit, 128, still bounds it).
 pub fn strict_json(bytes: &[u8]) -> Option<Value> {
     let mut d = serde_json::Deserializer::from_slice(bytes);
-    let v = de::DeserializeSeed::deserialize(Depth(0), &mut d).ok()?;
+    let v = de::DeserializeSeed::deserialize(Depth(0, false), &mut d).ok()?;
     d.end().ok()?;
     Some(v.0)
 }
