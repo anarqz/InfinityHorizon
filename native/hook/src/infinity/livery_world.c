@@ -268,7 +268,8 @@ static DWORD WINAPI lw_worker(void *argument) {
         int n = lw_ws.recvfrom(s, (char *)packet, sizeof(packet), 0, from, &from_size);
         if (lw_serial != serial || !fi_launch_network_allowed()) break;
         if (n >= 2 && lw_be16(packet) == 0x3E91u) {
-            azimuth_carstate_received(packet, n); /* the relay passing another car's headlights and roof */
+            /* the relay passing another car's state: only from the world itself, as voice below */
+            if (from_size >= 24 && memory_equal(from, lw_world, 4) && memory_equal(from + 8, lw_world + 8, 16)) azimuth_carstate_received(packet, n);
         } else if (n >= 2 && (lw_be16(packet) == 0x3E93u || lw_be16(packet) == 0x3E94u)) {
             /* from the world itself: family and port, then the address (sockaddr_in6) */
             if (from_size >= 24 && memory_equal(from, lw_world, 4) && memory_equal(from + 8, lw_world + 8, 16)) fi_voice_received(packet, n); /* voice chat for the overlay (voice_net.c) */

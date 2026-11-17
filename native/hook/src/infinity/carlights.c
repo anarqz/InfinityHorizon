@@ -18,7 +18,7 @@
      which keeps the presets' user counts and sets the system's +0x100 so the beam presets are
      uploaded again; glows game+0x10f1e20, uploaded every frame);
    - when the headlights go back to the game's, the car is no longer the player's (or no update
-     for CL_STALE_MS), the original preset goes back on each record that
+     for CL_APPLY_MS), the original preset goes back on each record that
      still holds ours, and ours is kept for the next car (never freed: the pools are fixed arrays,
      and ours are at most CL_SPARE per kind).
    A pool with no free preset leaves that light as the game has it: the shared preset is never
@@ -46,7 +46,8 @@
 #define CL_CARS 4 /* the local car, and the ones it was a moment ago, still going back */
 #define CL_LIGHTS 8 /* headlight records per car and kind (a car has 2..6) */
 #define CL_SPARE 64 /* presets of ours per kind, attached or kept */
-#define CL_STALE_MS 1000u
+#define CL_APPLY_MS 200u /* the car's renderer is followed only this long after its last update */
+#define CL_GONE_MS 2000u /* a scene not uploaded this long is gone: what was in it is dropped unwritten */
 #define CL_NONE 0xffffffffu
 
 #ifndef CL_NOW
@@ -66,12 +67,16 @@ typedef struct {
     int want;
     unsigned long long seen_at;
     void *system[2]; /* the beam and glow systems its lights are in */
+    uintptr_t print[2]; /* and their fingerprints (cl_print) */
+    unsigned long long uploaded_at[2];
     ClLight lights[2][CL_LIGHTS];
     int count[2];
 } ClCar;
 
 typedef struct {
     void *system;
+    uintptr_t print; /* the system's fingerprint when it was allocated */
+    unsigned long long seen_at;
     unsigned index;
     int attached;
 } ClSpare;
@@ -82,6 +87,7 @@ static ClSpare cl_spare[2][CL_SPARE];
 static int cl_spare_count[2];
 static SRWLOCK cl_lock = SRWLOCK_INIT;
 static volatile LONG cl_logged;
+static uintptr_t cl_current; /* the fingerprint of the system being uploaded (under cl_lock) */
 
 /* zeroed byte by byte (volatile: the freestanding DLL has no memset to be turned into) */
 static void cl_zero(void *at, size_t size) {
@@ -123,6 +129,18 @@ static void *cl_renderer(void *car) {
     return actual;
 }
 
+/* A system's fingerprint: where its light records and presets arrays are. A system freed and made
+   again (a new scene) at the same address has new arrays, so nothing of ours from the old one is
+   ever written into it. 0 when unreadable. */
+static uintptr_t cl_print(unsigned char *system, int glow) {
+    uintptr_t records = 0, presets = 0;
+    if (!system || !memory_read(system + (glow ? 0x678 : 0), &records, sizeof(records)) ||
+        !memory_read(system + (glow ? 0x6b0 : 0x38), &presets, sizeof(presets)) || !records || !presets) {
+        return 0;
+    }
+    return presets ^ (records << 1 | records >> (8 * sizeof(records) - 1));
+}
+
 /* The preset index a light record holds. */
 static unsigned cl_preset_of(unsigned char *system, int glow, unsigned record) {
     unsigned char *light = cl_record(system, glow ? 0x678 : 0, record, 0x40);
@@ -141,7 +159,8 @@ static unsigned char *cl_preset(unsigned char *system, int glow, unsigned index)
 
 static int cl_is_ours(void *system, int glow, unsigned index) {
     for (int i = 0; i < cl_spare_count[glow]; ++i) {
-        if (cl_spare[glow][i].system == system && cl_spare[glow][i].index == index) {
+        if (cl_spare[glow][i].system == system && cl_spare[glow][i].print == cl_current &&
+            cl_spare[glow][i].index == index) {
             return 1;
         }
     }
@@ -153,10 +172,17 @@ static int cl_is_ours(void *system, int glow, unsigned index) {
 static unsigned cl_take(unsigned char *system, int glow) {
     for (int i = 0; i < cl_spare_count[glow]; ++i) {
         ClSpare *s = &cl_spare[glow][i];
-        if (s->system == system && !s->attached) {
-            s->attached = 1;
-            return s->index;
+        if (s->system != system || s->print != cl_current || s->attached) {
+            continue;
         }
+        unsigned char *preset = cl_preset(system, glow, s->index);
+        int users = -1;
+        if (!preset || !memory_read(preset + (glow ? 0xec : 0x30), &users, 4) || users != 0) {
+            cl_spare[glow][i--] = cl_spare[glow][--cl_spare_count[glow]]; /* not ours any more: forgotten */
+            continue;
+        }
+        s->attached = 1;
+        return s->index;
     }
     if (cl_spare_count[glow] >= CL_SPARE) {
         return CL_NONE;
@@ -169,13 +195,14 @@ static unsigned cl_take(unsigned char *system, int glow) {
     }
     int users = 0;
     memory_copy(preset + (glow ? 0xec : 0x30), &users, 4); /* as the game's own registration starts it */
-    cl_spare[glow][cl_spare_count[glow]++] = (ClSpare){system, index, 1};
+    cl_spare[glow][cl_spare_count[glow]++] = (ClSpare){system, cl_current, CL_NOW(), index, 1};
     return index;
 }
 
 static void cl_give_back(void *system, int glow, unsigned index) {
     for (int i = 0; i < cl_spare_count[glow]; ++i) {
-        if (cl_spare[glow][i].system == system && cl_spare[glow][i].index == index) {
+        if (cl_spare[glow][i].system == system && cl_spare[glow][i].print == cl_current &&
+            cl_spare[glow][i].index == index) {
             cl_spare[glow][i].attached = 0;
         }
     }
@@ -402,32 +429,64 @@ void fi_carlights_local(void *car, int on) {
     }
     if (slot) {
         slot->want = renderer != 0;
-        slot->renderer = renderer ? renderer : slot->renderer;
+        slot->renderer = renderer;
         slot->seen_at = now;
     }
     ReleaseSRWLockExclusive(&cl_lock);
 }
+
+/* What `c` holds of kind `glow` is forgotten without a write (its scene is gone). */
+static void cl_drop(ClCar *c, int glow) {
+    c->count[glow] = 0;
+    c->system[glow] = 0;
+    c->print[glow] = 0;
+}
+
 void fi_carlights_upload(void *system_pointer, int glow) {
     unsigned char *system = system_pointer;
     glow = glow ? 1 : 0;
-    if (!cl_game || !system) {
+    uintptr_t print = cl_print(system, glow);
+    if (!cl_game || !system || !print) {
         return;
     }
     unsigned long long now = CL_NOW();
     int attached = 0;
     AcquireSRWLockExclusive(&cl_lock);
+    cl_current = print;
+    /* our presets of a scene made again (same address, new arrays) or not uploaded for CL_GONE_MS:
+       forgotten, never written */
+    for (int i = 0; i < cl_spare_count[glow]; ++i) {
+        ClSpare *s = &cl_spare[glow][i];
+        if (s->system == system && s->print == print) {
+            s->seen_at = now;
+        } else if (s->system == system || now - s->seen_at >= CL_GONE_MS) {
+            cl_spare[glow][i--] = cl_spare[glow][--cl_spare_count[glow]];
+        }
+    }
     for (int i = 0; i < CL_CARS; ++i) {
         ClCar *c = &cl_cars[i];
+        if (c->system[glow] && ((c->system[glow] == system && c->print[glow] != print) ||
+                                (c->system[glow] != system && now - c->uploaded_at[glow] >= CL_GONE_MS))) {
+            cl_drop(c, glow);
+        }
         if (!c->car && !c->count[0] && !c->count[1]) {
             continue;
         }
-        if (c->car && c->want && c->renderer && now - c->seen_at < CL_STALE_MS) {
+        /* the renderer is followed only just after an update of the car: once it is gone, never */
+        if (c->car && c->want && c->renderer && now - c->seen_at < CL_APPLY_MS) {
             cl_apply(c, system, glow);
         } else {
+            c->want = 0;
+            c->renderer = 0;
             cl_release(c, system, glow);
-            if (!c->count[0] && !c->count[1]) {
-                cl_zero(c, sizeof(*c)); /* gone: its slot is free */
-            }
+        }
+        if (c->system[glow] == system) {
+            c->print[glow] = print;
+            c->uploaded_at[glow] = now;
+        }
+        if (!c->want && !c->count[0] && !c->count[1]) {
+            cl_zero(c, sizeof(*c)); /* gone: its slot is free */
+            continue;
         }
         attached += c->count[glow];
     }

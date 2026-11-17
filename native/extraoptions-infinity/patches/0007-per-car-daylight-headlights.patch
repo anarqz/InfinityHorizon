@@ -9,9 +9,9 @@
 +// light of its light set (a car model's), so zeroing its threshold also lit every
 +// car of that model in daylight, traffic included. The ForzaInfinity hook linked
 +// into this DLL (native/hook/src/infinity/carlights.c) gives the player's car, and
-+// the other players' cars whose owners forced their headlights on, presets of
-+// their own with the threshold at 0, attached to their own light records just
-+// before each upload; the shared presets are never written.
++// only it (OD-248: no daylight trick on other players' cars in v1), presets of its
++// own with the threshold at 0, attached to its own light records just before each
++// upload; the shared presets are never written.
 +void fi_carlights_bind(unsigned char *game_image);
 +void fi_carlights_local(void *car, int on);
 +void fi_carlights_upload(void *system, int glow);

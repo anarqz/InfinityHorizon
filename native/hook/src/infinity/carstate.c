@@ -42,12 +42,14 @@
 #define CS_PARTS_LEN 8
 #define CS_UP_MAX (20 + 4 + CS_UP_LEN + 4 + CS_PARTS_LEN + FI_CS_BLOBS_PER_DATAGRAM * (4 + 4 + FI_CS_BLOB_MAX))
 #define CS_MODS ((int)INFINITY_CARSYNC_MODS_MAX)
+#define CS_MOD_CANDIDATES 48 /* 0xC0FD attributes looked at in one datagram (548 bytes hold at most 44) */
 #define CS_REMOTES 16
 #define CS_RESEND_MS 1000u
 #define CS_CHANGE_MS 100u
 #define CS_FRESH_MS 300u
 #define CS_FORGET_MS 5000u
 #define CS_ANNA_CHECK_MS 1000u
+#define CS_CAR_GONE_MS 1000u
 #define CS_MATCH_METERS 15.0f
 #define CS_UNMATCH_METERS 30.0f
 
@@ -79,6 +81,7 @@ typedef struct {
     int has_position;
     unsigned long long heard_at, position_at;
     void *car; /* the car it is shown on, once matched */
+    unsigned long long car_seen_at; /* that car's last update: a car gone for CS_CAR_GONE_MS frees the player */
     CsBlob blobs[CS_MODS];
 } CsRemote;
 
@@ -201,8 +204,8 @@ int fi_carstate_decode_down(const unsigned char *d, int n, FiCarState *s) {
         return 0;
     }
     const unsigned char *core = 0, *parts = 0;
-    const unsigned char *mods[FI_CS_BLOBS_PER_DATAGRAM];
-    int mod_count = 0;
+    const unsigned char *mods[FI_CS_BLOBS_PER_DATAGRAM], *seen[CS_MOD_CANDIDATES];
+    int mod_count = 0, seen_count = 0;
     for (int at = 20; at + 4 <= n;) {
         unsigned type = cs_get16(d + at), len = cs_get16(d + at + 2);
         if (at + 4 + (int)len > n) {
@@ -215,15 +218,21 @@ int fi_carstate_decode_down(const unsigned char *d, int n, FiCarState *s) {
             parts = v;
         } else if (type == CS_MOD_ATTR && len >= 5 && v[2] >= 1 && v[2] <= FI_CS_BLOB_MAX && len == 4u + v[2] &&
                    !v[3] && cs_blob_id(v[0])) {
-            int repeated = 0;
-            for (int i = 0; i < mod_count; ++i) {
-                repeated |= mods[i][0] == v[0];
-            }
-            if (!repeated && mod_count < FI_CS_BLOBS_PER_DATAGRAM) {
-                mods[mod_count++] = v;
+            if (seen_count < CS_MOD_CANDIDATES) {
+                seen[seen_count++] = v;
             }
         }
         at += 4 + (int)((len + 3) & ~3u);
+    }
+    /* a sync id repeated in one datagram drops every blob of it (§5f); then the first two */
+    for (int i = 0; i < seen_count && mod_count < FI_CS_BLOBS_PER_DATAGRAM; ++i) {
+        int repeats = 0;
+        for (int j = 0; j < seen_count; ++j) {
+            repeats += seen[j][0] == seen[i][0];
+        }
+        if (repeats == 1) {
+            mods[mod_count++] = seen[i];
+        }
     }
     if (!core || core[0] != CS_VERSION || core[1] > 2 || core[2] > 1) {
         return 0;
@@ -448,6 +457,19 @@ void azimuth_carstate_received(const unsigned char *d, int n) {
     }
 }
 
+void azimuth_carstate_unmatch(void *car) {
+    if (!car || !cs_remote_count) {
+        return;
+    }
+    AcquireSRWLockExclusive(&cs_lock);
+    for (int i = 0; i < CS_REMOTES; ++i) {
+        if (cs_remotes[i].car == car) {
+            cs_remotes[i].car = 0;
+        }
+    }
+    ReleaseSRWLockExclusive(&cs_lock);
+}
+
 int azimuth_carstate_any(void) {
     return cs_remote_count != 0;
 }
@@ -465,7 +487,7 @@ int azimuth_carstate_needs_position(void *car) {
     for (int i = 0; i < CS_REMOTES && !needed; ++i) {
         const CsRemote *r = &cs_remotes[i];
         needed = r->used && r->has_position && now - r->position_at < CS_FRESH_MS &&
-                 (matched ? r->car == car : !r->car);
+                 (matched ? r->car == car : !r->car || now - r->car_seen_at >= CS_CAR_GONE_MS);
     }
     ReleaseSRWLockExclusive(&cs_lock);
     return needed;
@@ -499,6 +521,9 @@ int azimuth_carstate_wanted(void *car, const float position[3], FiCarWanted *wan
         if (r->used && now - r->heard_at >= CS_FORGET_MS) {
             r->used = 0; /* left the world */
         }
+        if (r->used && r->car && r->car != car && now - r->car_seen_at >= CS_CAR_GONE_MS) {
+            r->car = 0; /* its car is gone (the player changed car, or it left the area) */
+        }
         count += r->used;
     }
     for (int i = 0; i < CS_REMOTES; ++i) {
@@ -512,6 +537,7 @@ int azimuth_carstate_wanted(void *car, const float position[3], FiCarWanted *wan
                 r->car = 0; /* not that player's car after all (or it changed car) */
                 continue;
             }
+            r->car_seen_at = now;
             cs_fill(r, wanted);
             found = 1;
             break;
@@ -526,6 +552,7 @@ int azimuth_carstate_wanted(void *car, const float position[3], FiCarWanted *wan
     }
     if (!found && best) {
         best->car = car;
+        best->car_seen_at = now;
         cs_fill(best, wanted);
         found = matched = 1;
     }
@@ -585,11 +612,11 @@ int32_t InfinityCarSync_Register(uint32_t abi_version, uint8_t sync_id, uint8_t 
 }
 
 int32_t InfinityCarSync_Publish(uint8_t sync_id, const void *bytes, uint32_t length) {
-    if (length > INFINITY_CARSYNC_BLOB_MAX || (length && !bytes)) {
-        return INFINITY_CARSYNC_E_LENGTH;
+    if (!length || length > INFINITY_CARSYNC_BLOB_MAX || !bytes) {
+        return INFINITY_CARSYNC_E_LENGTH; /* "off" is a blob of the mod's own (1..64 bytes), never nothing */
     }
     unsigned char copy[FI_CS_BLOB_MAX];
-    if (length && !memory_read(bytes, copy, length)) {
+    if (!memory_read(bytes, copy, length)) {
         return INFINITY_CARSYNC_E_ARGUMENT;
     }
     int32_t result = INFINITY_CARSYNC_OK;
@@ -597,10 +624,10 @@ int32_t InfinityCarSync_Publish(uint8_t sync_id, const void *bytes, uint32_t len
     CsMod *m = cs_registered(sync_id);
     if (!m) {
         result = INFINITY_CARSYNC_E_UNREGISTERED;
-    } else if (m->length != length || (length && !memory_equal(m->bytes, copy, length))) {
+    } else if (m->length != length || !memory_equal(m->bytes, copy, length)) {
         m->length = (unsigned char)length;
         memory_copy(m->bytes, copy, length);
-        m->dirty = length != 0;
+        m->dirty = 1;
     }
     ReleaseSRWLockExclusive(&cs_lock);
     return result;
@@ -609,6 +636,10 @@ int32_t InfinityCarSync_Publish(uint8_t sync_id, const void *bytes, uint32_t len
 int32_t InfinityCarSync_Get(const void *car, uint8_t sync_id, void *out, uint32_t capacity, uint8_t *blob_version) {
     if (!car || (!out && capacity)) {
         return INFINITY_CARSYNC_E_ARGUMENT;
+    }
+    unsigned kind = 0;
+    if (!memory_read((const unsigned char *)car + 0x4d08, &kind, sizeof(kind)) || (kind != 2 && kind != 5)) {
+        return INFINITY_CARSYNC_NONE; /* only a network car is another player's (a reused address never is) */
     }
     unsigned long long now = CS_NOW();
     int32_t result = INFINITY_CARSYNC_NONE;

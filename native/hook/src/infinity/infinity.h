@@ -432,6 +432,9 @@ int fi_anna_loaded(void);
 void azimuth_carstate_local(int lights, int roof, int signals, unsigned parts);
 void azimuth_carstate_received(const unsigned char *data, int size);
 int azimuth_carstate_any(void);
+/* car is no longer shown as a player's (not a network car, the game's own again, or its slot was
+   reused): no player stays matched to it. */
+void azimuth_carstate_unmatch(void *car);
 /* Whether azimuth_carstate_wanted needs `car`'s position now (else it is passed NULL). */
 int azimuth_carstate_needs_position(void *car);
 /* What a remote player's car should show (has_parts only when it came with 0xC0FC and FH2 ANNA is

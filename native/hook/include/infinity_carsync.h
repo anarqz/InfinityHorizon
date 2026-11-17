@@ -1,5 +1,26 @@
-/* ForzaInfinity hook: the car-state sync API for mods (CR-L53, OD-248). GPL-3.0-or-later, see
-   native/hook/LICENSE. Self-contained: a mod copies or includes this one file.
+/* SPDX-License-Identifier: MIT
+
+   Copyright (c) 2026 Alexandre Moraes and the Infinity Launcher contributors
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy of this file (the
+   "Software"), to deal in the Software without restriction, including without limitation the
+   rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+   Software, and to permit persons to whom the Software is furnished to do so, subject to the
+   following conditions: the above copyright notice and this permission notice shall be included
+   in all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+   BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+   This one header is MIT (owner decision, 2026-11-17) so mods of any licence can include it; the
+   rest of the hook stays GPL-3.0-or-later (native/hook/NOTICE.md). It is self-contained: it
+   includes only system headers.
+
+   ForzaInfinity hook: the car-state sync API for mods (CR-L53, OD-248). A mod copies or includes
+   this one file.
 
    A mod (an ExtraOptions plugin such as Underglow) shows its own state on the cars of the other
    players in an online free-roam world who have the same mod. It gives the hook up to 64 opaque
@@ -17,8 +38,12 @@
      forgets it 5 s after its sender stopped sending it; the hook does the same (a blob older than
      5 s is gone). Every received byte must still be validated by the mod: nothing here is
      authority.
-   - the hook sends on a change (at most 10 times a second, CAR_STATE_MIN_MS) and every second;
-     at most two blobs go in one datagram (rotated when more mods are registered).
+   - the hook sends on a change (at most 10 times a second) and every second; at most two blobs go
+     in one datagram (rotated when more mods are registered);
+   - a mod must always have a blob out, its "off" state included: publish an explicit off blob (the
+     mod's own bytes, e.g. a flags byte of 0) right after Register, never nothing. The world sends
+     0xC0FD to a hook only while that hook sends some, so a mod with nothing published receives
+     nothing from the others either.
 
    The hook may be absent (offline, another loader, an older hook): resolve the API at run time and
    work without it. InfinityCarSync_Resolve below finds the module that exports it (the hook is
@@ -52,7 +77,7 @@ extern "C" {
 #define INFINITY_CARSYNC_E_ID (-2)           /* sync id 0, or one that is not a blob (2) */
 #define INFINITY_CARSYNC_E_FULL (-3)         /* INFINITY_CARSYNC_MODS_MAX mods already registered */
 #define INFINITY_CARSYNC_E_UNREGISTERED (-4) /* Publish/Get before Register of that id */
-#define INFINITY_CARSYNC_E_LENGTH (-5)       /* Publish: length > INFINITY_CARSYNC_BLOB_MAX, or bytes NULL */
+#define INFINITY_CARSYNC_E_LENGTH (-5)       /* Publish: length 0 or > INFINITY_CARSYNC_BLOB_MAX, or bytes NULL */
 #define INFINITY_CARSYNC_E_CAPACITY (-6)     /* Get: capacity smaller than the blob (nothing copied) */
 #define INFINITY_CARSYNC_E_ARGUMENT (-7)     /* a NULL pointer, or Info's size below 8 */
 
@@ -73,8 +98,9 @@ typedef uint32_t (*InfinityCarSync_VersionFn)(void);
 typedef int32_t (*InfinityCarSync_InfoFn)(InfinityCarSyncInfo *info);
 /* Register a mod's sync id; again with the same id only updates its blob version. */
 typedef int32_t (*InfinityCarSync_RegisterFn)(uint32_t abi_version, uint8_t sync_id, uint8_t blob_version);
-/* The local car's blob, `length` 1..64 bytes (copied); length 0 withdraws it (nothing sent). An
-   unchanged blob costs nothing: call it whenever the mod's state may have changed. */
+/* The local car's blob, `length` 1..64 bytes (copied; 0 is refused). An unchanged blob costs
+   nothing: call it whenever the mod's state may have changed. Once published, the blob goes with
+   every refresh for as long as the process runs. */
 typedef int32_t (*InfinityCarSync_PublishFn)(uint8_t sync_id, const void *bytes, uint32_t length);
 /* Another player's blob for `car` (a ForzaCar pointer of the game, as the mod's car hooks see it;
    only the remote players' cars, ForzaCar kind 2 or 5, that the hook matched to their owner):

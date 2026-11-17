@@ -53,6 +53,7 @@
 #define CS_CODE_END_RVA 0x1dcc000u
 #define CS_ROOF_CARS 16
 #define CS_REMOTE_CARS 16
+#define CS_SLOT_GONE_MS 1000u
 
 typedef void (*CarUpdateFn)(void *, float, float, unsigned);
 typedef void (*AnimationEventFn)(void *, const char *);
@@ -333,31 +334,51 @@ static struct {
     void *car, *animation;
     int lights, signals;
     unsigned parts;
+    unsigned long long used_at;
 } cs_remote_cars[CS_REMOTE_CARS];
 
-/* What it last showed on `car` (a slot for it when `make`). */
+static void cs_restore_slot(int i, int write);
+static int cs_remote_shown; /* a remote car was shown once: the forgetting paths have work */
+
+/* What it last showed on `car` (a slot for it when `make`). A slot whose car had no update for
+   CS_SLOT_GONE_MS is free (the car may be gone: it is not written); with none free, the oldest
+   car is given back to the game first. */
 static int cs_remote_slot(void *car, int make) {
-    int free_slot = -1;
+    unsigned long long now = GetTickCount64();
+    int free_slot = -1, oldest = 0;
     for (int i = 0; i < CS_REMOTE_CARS; ++i) {
         if (cs_remote_cars[i].car == car) {
+            if (car) {
+                cs_remote_cars[i].used_at = now;
+            }
             return i;
         }
-        if (!cs_remote_cars[i].car && free_slot < 0) {
+        if ((!cs_remote_cars[i].car || now - cs_remote_cars[i].used_at >= CS_SLOT_GONE_MS) && free_slot < 0) {
             free_slot = i;
+        }
+        if (cs_remote_cars[i].used_at < cs_remote_cars[oldest].used_at) {
+            oldest = i;
         }
     }
     if (!make) {
         return -1;
     }
-    int i = free_slot >= 0 ? free_slot : (int)((uintptr_t)car >> 4) % CS_REMOTE_CARS;
+    int i = free_slot;
+    if (i < 0) {
+        i = oldest;
+        cs_restore_slot(i, 1); /* a live car: the game's own state back on it */
+    } else if (cs_remote_cars[i].car) {
+        cs_restore_slot(i, 0);
+    }
     cs_remote_cars[i].car = car;
     cs_remote_cars[i].animation = 0;
     cs_remote_cars[i].lights = 0;
     cs_remote_cars[i].signals = 0;
     cs_remote_cars[i].parts = 0;
+    cs_remote_cars[i].used_at = now;
+    cs_remote_shown = 1;
     return i;
 }
-
 /* A remote player's car is a ForzaCar of kind (+0x4d08) 2 or 5 (the network's; 0 is the local
    player's, 1/4 the AI and traffic: carsync-mods.md §1). */
 static int cs_remote_kind(void *car) {
@@ -393,8 +414,8 @@ static void cs_move_part(void *car, void *animation, int part, int open) {
    update; when they change, the lights update game+0xf5c900 runs so they show at once, the
    car's own update keeping them after; by day they look as the game draws them: OD-248 v1 has no
    daylight trick on remote cars); its roof, and with FH2 ANNA on both sides its other parts,
-   moved by the same animation events; with FH2 ANNA its signals, written around the update as the headlights are (the GameAI loop
-   0x140843010 rewrites the three bytes of the cars it drives each tick). */
+   moved by the same animation events; with FH2 ANNA its signals, written around the update as
+   the headlights are (the GameAI loop 0x140843010 rewrites the three bytes of the cars it drives each tick). */
 static void cs_show_remote(void *car, const FiCarWanted *w, int after, float dt) {
     int i = cs_remote_slot(car, 1);
     int lights = w->lights, signals = w->has_parts ? (int)w->signals : 0;
@@ -441,23 +462,48 @@ static void cs_show_remote(void *car, const FiCarWanted *w, int after, float dt)
     }
 }
 
-/* The game's own again on a car no longer shown as a player's. */
-static void cs_forget_remote(void *car) {
-    int i = cs_remote_slot(car, 0);
-    if (i < 0) {
+/* Slot `i` given back: with `write`, the game's own state on its car again (headlights to the
+   game's, signals off, the parts it opened closed); its player is no longer matched to it. */
+static void cs_restore_slot(int i, int write) {
+    void *car = cs_remote_cars[i].car;
+    if (!car) {
         return;
     }
-    if (cs_remote_cars[i].lights) {
-        ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_MANUAL_RVA))(car, 0);
+    if (write) {
+        if (cs_remote_cars[i].lights) {
+            ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_MANUAL_RVA))(car, 0);
+        }
+        if (cs_remote_cars[i].signals) {
+            cs_write_signals(car, 0);
+        }
+        void *animation = cs_car_animation(car);
+        if (animation && animation == cs_remote_cars[i].animation) {
+            for (int k = 0; k < CS_PARTS; ++k) {
+                if (cs_remote_cars[i].parts & (1u << cs_part_order[k])) {
+                    cs_move_part(car, animation, cs_part_order[k], 0);
+                }
+            }
+        }
     }
-    if (cs_remote_cars[i].signals) {
-        cs_write_signals(car, 0);
-    }
+    azimuth_carstate_unmatch(car);
     cs_remote_cars[i].car = 0;
+    cs_remote_cars[i].parts = 0;
 }
 
+/* The game's own again on a car no longer shown as a player's (it is being updated: it is live). */
+static void cs_forget_remote(void *car) {
+    int i = cs_remote_slot(car, 0);
+    if (i >= 0) {
+        cs_restore_slot(i, 1);
+    } else {
+        azimuth_carstate_unmatch(car);
+    }
+}
 static int cs_remote_state(void *car, FiCarWanted *wanted) {
     if (!azimuth_carstate_any()) {
+        if (cs_remote_shown) {
+            cs_forget_remote(car); /* the last player left or timed out: its state goes too */
+        }
         return 0;
     }
     if (!cs_remote_kind(car)) {
@@ -484,10 +530,16 @@ static int cs_remote_state(void *car, FiCarWanted *wanted) {
 static void cs_car_update(void *self, float dt, float frame_dt, unsigned frame) {
     fi_game_callback();
     if (!self || !fi_eo_sync_enabled()) {
+        if (self && cs_remote_shown) {
+            cs_forget_remote(self); /* the sync stopped: what it showed goes back */
+        }
         cs_car_update_original(self, dt, frame_dt, frame);
         return;
     }
     int owned = cs_local_car_for(frame) == self;
+    if (owned) {
+        cs_forget_remote(self); /* the player's own car is never another's */
+    }
     FiCarWanted wanted = {0, 0, 0, 0, 0};
     int remote = !owned && cs_remote_state(self, &wanted);
     if (remote) {
