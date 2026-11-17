@@ -23,8 +23,8 @@
      (forced on), 2 (forced off); the roof from its last event; with FH2 ANNA loaded also its
      other parts and its signals (+0x51bb hazards, +0x51bc left, +0x51bd right). It goes to the
      relay when it changes and every second (carstate.c);
-   - another player's car (a ForzaCar of kind 2 or 5 at +0x4d08, the network's), matched by
-     position (carstate.c), gets its owner's headlights through the same setters around the
+   - another player's car (a ForzaCar that may be one: kind 2, 3 or 5 at +0x4d08,
+     fi_car_remote_kind; the match itself is by position, carstate.c), gets its owner's headlights through the same setters around the
      game's update (by day as the game draws them, OD-248 v1), its roof through the same events,
      and with FH2 ANNA loaded here and there its other parts the same way and its signals
      through their setters (game+0xf755c0 / +0xf76f10 / +0xf774e0) around the update.
@@ -379,13 +379,6 @@ static int cs_remote_slot(void *car, int make) {
     cs_remote_shown = 1;
     return i;
 }
-/* A remote player's car is a ForzaCar of kind (+0x4d08) 2 or 5 (the network's; 0 is the local
-   player's, 1/4 the AI and traffic: carsync-mods.md §1). */
-static int cs_remote_kind(void *car) {
-    unsigned kind = 0;
-    return memory_read((unsigned char *)car + 0x4d08, &kind, sizeof(kind)) && (kind == 2 || kind == 5);
-}
-
 static void cs_write_signals(void *car, int signals) {
     ((HeadlightSetter)(uintptr_t)(cs_game + CS_HAZARDS_RVA))(car, signals == 1);
     ((HeadlightSetter)(uintptr_t)(cs_game + CS_LEFT_SIGNAL_RVA))(car, signals == 2);
@@ -506,8 +499,13 @@ static int cs_remote_state(void *car, FiCarWanted *wanted) {
         }
         return 0;
     }
-    if (!cs_remote_kind(car)) {
-        cs_forget_remote(car); /* only the network's cars show another player's state */
+    unsigned kind = 0;
+    if (!fi_car_remote_kind(car, &kind)) {
+        cs_forget_remote(car); /* the local player's car, the AI and traffic never show another's */
+        float spot[3];
+        if (kind != 0 && kind != 0xffffffffu && azimuth_carstate_unmatched_fresh() && cs_car_position(car, spot)) {
+            azimuth_carstate_candidate(car, kind, spot); /* only for the diagnostic line */
+        }
         return 0;
     }
     float position[3];

@@ -444,8 +444,17 @@ typedef struct {
     int has_parts;
     unsigned signals, parts;
 } FiCarWanted;
-/* What car `car` (a ForzaCar of kind 2 or 5, at `position`, NULL if unknown) should show, when it
-   is a player's: 1 and the state, else 0. */
+/* A ForzaCar that may be another player's (+0x4d08 kind 2, 3 or 5: neither the local player's 0 nor
+   the AI's and traffic's 1/4; live test 2026-11-17: another human was kind 3, and kind 2 also covers
+   drivatars and pooled session cars, so kind only pre-filters: the match is by position). The kind
+   read goes to *kind (0xffffffff unreadable) when kind is not NULL. */
+int fi_car_remote_kind(const void *car, unsigned *kind);
+/* For the diagnostic line: a player with a fresh position and no car matched exists (cheap when not),
+   and a car of another kind near it was seen. */
+int azimuth_carstate_unmatched_fresh(void);
+void azimuth_carstate_candidate(void *car, unsigned kind, const float position[3]);
+/* What car `car` (fi_car_remote_kind, at `position`, NULL if unknown) should show, when it is a
+   player's: 1 and the state, else 0. */
 int azimuth_carstate_wanted(void *car, const float position[3], FiCarWanted *wanted);
 /* carlights.c: daylight headlights of the player's car on presets of its own (CR-L53). With its
    headlights forced on it gets its own copies of its headlight presets (amount types 13 and 17,

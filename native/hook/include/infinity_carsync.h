@@ -103,7 +103,7 @@ typedef int32_t (*InfinityCarSync_RegisterFn)(uint32_t abi_version, uint8_t sync
    every refresh for as long as the process runs. */
 typedef int32_t (*InfinityCarSync_PublishFn)(uint8_t sync_id, const void *bytes, uint32_t length);
 /* Another player's blob for `car` (a ForzaCar pointer of the game, as the mod's car hooks see it;
-   only the remote players' cars, ForzaCar kind 2 or 5, that the hook matched to their owner):
+   only cars the hook matched to another player by position, among ForzaCar kinds 2, 3 and 5):
    copies it into `out` and returns its length, with its version in *blob_version (may be NULL);
    0 when that car has none. */
 typedef int32_t (*InfinityCarSync_GetFn)(const void *car, uint8_t sync_id, void *out, uint32_t capacity,

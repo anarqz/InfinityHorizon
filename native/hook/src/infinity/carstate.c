@@ -20,7 +20,7 @@
    hook that speaks). The relay passes each other player's state with that player's XUID and the
    position of its car, taken from its last CarPredictionFull as it is sent.
 
-   The game's car objects do not say whose they are, so a remote car (ForzaCar kind 2 or 5,
+   The game's car objects do not say whose they are, so a remote car (a ForzaCar of kind 2, 3 or 5,
    carstate_hook.c) is matched by position: the first car within CS_MATCH_METERS of a player's
    position heard less than CS_FRESH_MS ago is that player's, and stays so until, with a fresh
    position, it is CS_UNMATCH_METERS away. carstate_hook.c asks for each such car what to show
@@ -50,6 +50,7 @@
 #define CS_FORGET_MS 5000u
 #define CS_ANNA_CHECK_MS 1000u
 #define CS_CAR_GONE_MS 1000u
+#define CS_DIAG_MS 5000u
 #define CS_MATCH_METERS 15.0f
 #define CS_UNMATCH_METERS 30.0f
 
@@ -82,6 +83,12 @@ typedef struct {
     unsigned long long heard_at, position_at;
     void *car; /* the car it is shown on, once matched */
     unsigned long long car_seen_at; /* that car's last update: a car gone for CS_CAR_GONE_MS frees the player */
+    /* the diagnostic line (cs_diagnose): when it last went, what it said, the nearest car seen since */
+    unsigned long long diag_at;
+    unsigned char diag_lights, diag_roof, diag_position, diag_matched;
+    float nearest_d2; /* < 0: none */
+    unsigned nearest_kind;
+    unsigned char peer;
     CsBlob blobs[CS_MODS];
 } CsRemote;
 
@@ -377,6 +384,125 @@ static CsMod *cs_registered(unsigned id) {
     return 0;
 }
 
+int fi_car_remote_kind(const void *car, unsigned *kind_out) {
+    unsigned kind = 0xffffffffu;
+    int ok = car && memory_read((const unsigned char *)car + 0x4d08, &kind, sizeof(kind));
+    if (kind_out) {
+        *kind_out = ok ? kind : 0xffffffffu;
+    }
+    return ok && (kind == 2 || kind == 3 || kind == 5);
+}
+
+static void cs_add(char *out, size_t cap, const char *text) {
+    size_t n = text_length(out);
+    while (*text && n + 1 < cap) {
+        out[n++] = *text++;
+    }
+    out[n] = 0;
+}
+
+static void cs_add_number(char *out, size_t cap, long long value) {
+    char digits[24], text[26];
+    int k = 0, m = 0;
+    unsigned long long v = value < 0 ? (unsigned long long)-value : (unsigned long long)value;
+    do {
+        digits[k++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v && k < 20);
+    if (value < 0) {
+        text[m++] = '-';
+    }
+    while (k) {
+        text[m++] = digits[--k];
+    }
+    text[m] = 0;
+    cs_add(out, cap, text);
+}
+
+/* The world's peer  is matched to a car now (under cs_lock). */
+static int cs_matched(const CsRemote *r, unsigned long long now) {
+    return r->car && now - r->car_seen_at < CS_CAR_GONE_MS;
+}
+
+/* One line per peer at most every CS_DIAG_MS, and one on each change of what it sends (lights, roof,
+   position or not) or of its match: the peer index (the world's, never an address or XUID), the
+   position flag and the time since the previous position against CS_FRESH_MS, whether a car is
+   matched, else the nearest car seen near that position since the last line (its kind, metres).
+   Under cs_lock; 1 when line holds a line to log. */
+static int cs_diagnose(CsRemote *r, const FiCarState *s, long long gap, unsigned long long now, char *line,
+                       size_t cap) {
+    int matched = cs_matched(r, now);
+    int changed = !r->diag_at || r->diag_lights != s->lights || r->diag_roof != s->roof ||
+                  r->diag_position != (s->has_position ? 1 : 0) || r->diag_matched != matched;
+    if (!changed && now - r->diag_at < CS_DIAG_MS) {
+        return 0;
+    }
+    line[0] = 0;
+    cs_add(line, cap, "CARSTATE: peer ");
+    cs_add_number(line, cap, s->peer);
+    cs_add(line, cap, " lights=");
+    cs_add_number(line, cap, s->lights);
+    cs_add(line, cap, " roof=");
+    cs_add_number(line, cap, s->roof);
+    cs_add(line, cap, s->has_position ? " position=yes" : " position=no");
+    cs_add(line, cap, " since_previous_ms=");
+    cs_add_number(line, cap, gap);
+    cs_add(line, cap, " fresh_ms=");
+    cs_add_number(line, cap, CS_FRESH_MS);
+    if (matched) {
+        cs_add(line, cap, " matched=yes");
+    } else if (r->nearest_d2 >= 0) {
+        float d = r->nearest_d2, m = d > 1 ? d / 2 : 1; /* a square root, Newton's way (no libm) */
+        for (int i = 0; i < 20; ++i) {
+            m = 0.5f * (m + d / m);
+        }
+        cs_add(line, cap, " matched=no nearest_kind=");
+        cs_add_number(line, cap, r->nearest_kind);
+        cs_add(line, cap, " nearest_m=");
+        cs_add_number(line, cap, (long long)(m + 0.5f));
+        cs_add(line, cap, " radius_m=");
+        cs_add_number(line, cap, (long long)CS_MATCH_METERS);
+    } else {
+        cs_add(line, cap, " matched=no nearest=none");
+    }
+    cs_add(line, cap, "\r\n");
+    r->diag_at = now;
+    r->diag_lights = s->lights;
+    r->diag_roof = s->roof;
+    r->diag_position = s->has_position ? 1 : 0;
+    r->diag_matched = (unsigned char)matched;
+    r->nearest_d2 = -1;
+    return 1;
+}
+
+/* For the diagnostic: a car of the frame near the fresh position of a player with no car. */
+static void cs_note_candidate(CsRemote *r, unsigned kind, const float position[3], unsigned long long now);
+
+int azimuth_carstate_unmatched_fresh(void) {
+    if (!cs_remote_count) {
+        return 0;
+    }
+    unsigned long long now = CS_NOW();
+    int any = 0;
+    AcquireSRWLockShared(&cs_lock);
+    for (int i = 0; i < CS_REMOTES && !any; ++i) {
+        const CsRemote *r = &cs_remotes[i];
+        any = r->used && r->has_position && now - r->position_at < CS_FRESH_MS && !cs_matched(r, now);
+    }
+    ReleaseSRWLockShared(&cs_lock);
+    return any;
+}
+
+void azimuth_carstate_candidate(void *car, unsigned kind, const float position[3]) {
+    (void)car;
+    unsigned long long now = CS_NOW();
+    AcquireSRWLockExclusive(&cs_lock);
+    for (int i = 0; i < CS_REMOTES; ++i) {
+        cs_note_candidate(&cs_remotes[i], kind, position, now);
+    }
+    ReleaseSRWLockExclusive(&cs_lock);
+}
+
 void azimuth_carstate_received(const unsigned char *d, int n) {
     FiCarState s;
     if (!fi_eo_sync_enabled() || !fi_carstate_decode_down(d, n, &s)) {
@@ -409,6 +535,7 @@ void azimuth_carstate_received(const unsigned char *d, int n) {
         cs_zero(r, sizeof(*r));
         r->used = 1;
         r->xuid = s.xuid;
+        r->nearest_d2 = -1;
     }
     r->lights = s.lights;
     r->roof = s.roof;
@@ -416,6 +543,8 @@ void azimuth_carstate_received(const unsigned char *d, int n) {
     r->signals = anna ? s.signals : 0;
     r->parts = anna ? s.parts : 0;
     r->heard_at = now;
+    r->peer = s.peer;
+    long long gap = r->has_position ? (long long)(now - r->position_at) : -1;
     if (s.has_position) {
         memory_copy(r->position, s.position, sizeof(s.position));
         r->has_position = 1;
@@ -451,9 +580,14 @@ void azimuth_carstate_received(const unsigned char *d, int n) {
         count += cs_remotes[i].used;
     }
     InterlockedExchange(&cs_remote_count, count);
+    char line[200];
+    int diagnose = cs_diagnose(r, &s, gap, now, line, sizeof(line));
     ReleaseSRWLockExclusive(&cs_lock);
     if (fresh) {
         log_append("CARSTATE: a player's car state is heard from the relay.\r\n");
+    }
+    if (diagnose) {
+        log_append(line);
     }
 }
 
@@ -501,6 +635,17 @@ static float cs_distance2(const float *a, const float *b) {
     return d;
 }
 
+static void cs_note_candidate(CsRemote *r, unsigned kind, const float position[3], unsigned long long now) {
+    if (!r->used || !r->has_position || now - r->position_at >= CS_FRESH_MS || cs_matched(r, now)) {
+        return;
+    }
+    float d2 = cs_distance2(position, r->position);
+    if (r->nearest_d2 < 0 || d2 < r->nearest_d2) {
+        r->nearest_d2 = d2;
+        r->nearest_kind = kind;
+    }
+}
+
 static void cs_fill(const CsRemote *r, FiCarWanted *w) {
     w->lights = r->lights;
     w->roof = r->roof;
@@ -543,6 +688,9 @@ int azimuth_carstate_wanted(void *car, const float position[3], FiCarWanted *wan
             break;
         }
         if (!r->car && position && recent) {
+            unsigned kind = 0;
+            fi_car_remote_kind(car, &kind);
+            cs_note_candidate(r, kind, position, now);
             float d2 = cs_distance2(position, r->position);
             if (d2 < best_d2) {
                 best_d2 = d2;
@@ -637,8 +785,7 @@ int32_t InfinityCarSync_Get(const void *car, uint8_t sync_id, void *out, uint32_
     if (!car || (!out && capacity)) {
         return INFINITY_CARSYNC_E_ARGUMENT;
     }
-    unsigned kind = 0;
-    if (!memory_read((const unsigned char *)car + 0x4d08, &kind, sizeof(kind)) || (kind != 2 && kind != 5)) {
+    if (!fi_car_remote_kind(car, 0)) {
         return INFINITY_CARSYNC_NONE; /* only a network car is another player's (a reused address never is) */
     }
     unsigned long long now = CS_NOW();
