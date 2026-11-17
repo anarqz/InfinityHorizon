@@ -75,8 +75,12 @@ public partial class MainWindow : Window
         // One launcher per state folder (launcher.lock).
         _ = vm.AcquireInstanceLockAsync();
         ContentRendered += async (_, _) => await vm.ConfirmUpdatedStartupAsync(cli);
-        var azimuth = Array.IndexOf(cli, "--azimuth") is var i and >= 0 && i + 1 < cli.Length ? cli[i + 1] : Environment.GetEnvironmentVariable("FI_AZIMUTH");
-        // OD-46: --azimuth / FI_AZIMUTH, else the saved choice, the launcher's folder, then a look around.
+        // OD-46: --azimuth / FI_AZIMUTH, else the saved choice, the launcher's folder, then a look around. DEVLAUNCH: a development
+        // build uses only the folder its --azimuth names (none given: none, and it says so), never a saved or found one.
+        var azimuth = BuildProfile.ProductionOnly
+            ? Array.IndexOf(cli, "--azimuth") is var i and >= 0 && i + 1 < cli.Length ? cli[i + 1] : Environment.GetEnvironmentVariable("FI_AZIMUTH")
+            : DevelopmentLaunch.AzimuthFromArguments(arguments);
+        if (!BuildProfile.ProductionOnly) vm.PinDevelopmentAzimuth(azimuth);
         Loaded += async (_, _) =>
         {
             if (await vm.RecoverInterruptedUpdateAsync(cli)) return;
@@ -107,8 +111,11 @@ public partial class MainWindow : Window
             ? cli[localeAt + 1] : Strings.LocaleFor(CultureInfo.CurrentUICulture);
     }
 
-    /// <summary>The launcher's state root (each server's own folder below it, <see cref="ServerConfig.StateDirectory"/>).</summary>
-    internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
+    /// <summary>
+    /// The launcher's state root (each server's own folder below it, <see cref="ServerConfig.StateDirectory"/>); a development build's
+    /// is its own <c>launcher-dev</c> (DEVLAUNCH), so it never changes the release launcher's choice, Azimuth location or sessions.
+    /// </summary>
+    internal static string StateRoot => DevelopmentLaunch.StateRoot;
 
     /// <summary>CR-L39: the server the player chose on the screen, else the command line's (official in a release build).</summary>
     internal static ServerConfig ConfigFor(IReadOnlyList<string> arguments) =>
@@ -578,7 +585,12 @@ public partial class MainWindow : Window
 
     private void OnNavHome(object sender, RoutedEventArgs e) => _vm.OpenHome();
 
-    private void OnOpenSignIn(object sender, RoutedEventArgs e) => _vm.OpenSignIn();
+    private void OnOpenSignIn(object sender, RoutedEventArgs e)
+    {
+        _vm.OpenSignIn();
+        // DEVLAUNCH: the form takes the focus (the e-mail), so a second A/Enter types the account instead of landing on Change server
+        _ = Dispatcher.InvokeAsync(() => { if (EmailBox.IsVisible) EmailBox.Focus(); }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
 
     // CR-L39: the server choice on the welcome screen and a custom server's changed keys.
     private void OnServerChange(object sender, RoutedEventArgs e)
@@ -624,11 +636,11 @@ public partial class MainWindow : Window
     {
         try
         {
-            // only the locale carries over: the server comes from the saved choice
-            var arguments = Environment.GetCommandLineArgs().Skip(1).ToList();
+            // DEVLAUNCH: the original arguments carry over (--azimuth, --locale, --environment...); a custom choice leaves out only
+            // --server/--portal, which would win over it (DevelopmentLaunch.RestartArguments)
+            var arguments = DevelopmentLaunch.RestartArguments(Environment.GetCommandLineArgs().Skip(1).ToList(), customChosen: ServerChoice.Read(StateRoot) is not null);
             var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath ?? "infinity.exe") { UseShellExecute = false };
-            var localeAt = arguments.IndexOf("--locale");
-            if (localeAt >= 0 && localeAt + 1 < arguments.Count) { start.ArgumentList.Add("--locale"); start.ArgumentList.Add(arguments[localeAt + 1]); }
+            foreach (var argument in arguments) start.ArgumentList.Add(argument);
             System.Diagnostics.Process.Start(start)?.Dispose();
         }
         catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)

@@ -138,6 +138,10 @@ public sealed partial class ShellViewModel
             var detail = string.Join(" · ", new[] { host, listed?.Region ?? "", listed is null ? "" : ReachText(listed.Endpoint) }.Where(t => t.Length > 0));
             items.Add(new(ServerPickItem.ListedKind, listed?.Name ?? S["picker.play_server"], detail, S["picker.badge_official"], play, PickerStatusText(play)));
         }
+        // DEVLAUNCH: in a development build the first row is the command line's server, named by its address (it stays a development server)
+        else if (DevelopmentServer is { } development)
+            items.Add(new(ServerPickItem.OfficialKind, S["picker.dev_server"], S.Format("picker.dev_server_detail", ("server", development.Authority)), "", null,
+                PickerStatusText(OfficialStatusOrigin)));
         else items.Add(new(ServerPickItem.OfficialKind, S["server.official"], S["picker.official_detail"], "", null, PickerStatusText(OfficialStatusOrigin)));
         foreach (var server in BuildProfile.ProductionOnly ? [] : _beholder?.Servers ?? [])
         {

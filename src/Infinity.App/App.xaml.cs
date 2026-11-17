@@ -82,7 +82,7 @@ public partial class App : Application
     {
         try
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ForzaInfinity", "launcher");
+            var dir = Infinity.App.MainWindow.StateRoot; // DEVLAUNCH: a development build logs in its own launcher-dev
             Directory.CreateDirectory(dir);
             File.AppendAllText(Path.Combine(dir, "launcher.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {line}{Environment.NewLine}");
         }

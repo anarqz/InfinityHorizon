@@ -195,7 +195,12 @@ public sealed partial class ShellViewModel
         {
             // owner 2026-10-27: the location is the PC's (the launcher root), found in any server's folder
             var root = StateRoot;
-            found = await Task.Run(() => AzimuthSetup.Find(explicitFolder, _stateDirectory, AppContext.BaseDirectory, AzimuthSearchRoots, root, notes.Add));
+            // DEVLAUNCH: a development build looks only at its --azimuth folder (no saved choice, no look-around); none given, none
+            var pinned = _pinnedAzimuth;
+            found = !_azimuthPinned
+                ? await Task.Run(() => AzimuthSetup.Find(explicitFolder, _stateDirectory, AppContext.BaseDirectory, AzimuthSearchRoots, root, notes.Add))
+                : pinned is null ? null : await Task.Run(() => AzimuthInstall.Detect(pinned));
+            if (_azimuthPinned && pinned is null) Message = DevelopmentAzimuthRefusal;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -220,6 +225,7 @@ public sealed partial class ShellViewModel
     public void ChooseAzimuthFolder(string folder)
     {
         if ((!InShell && !DevelopmentMods) || !ModsIdle) return;
+        if (RefusesPickedAzimuth(folder)) { _azimuthChoiceFailed = true; ConfigurationMessage(DevelopmentAzimuthRefusal, error: true); return; }
         if (!AzimuthSetup.SaveChoice(_stateDirectory, folder, StateRoot))
         {
             _azimuthChoiceFailed = true;
