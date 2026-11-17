@@ -13,17 +13,21 @@
    - game+0x2a9400, the car update (the vtable slot game+0x2c5cc00 holds it; ExtraOptions
      replaces that slot with its own wrapper, which calls this function directly, so the
      detour sees every car with or without ExtraOptions, and the slot is never touched);
-   - game+0xf5d300, a car's animation event ("roof:open", "roof:close", "roof:toggle"...; the
-     game calls it, and ExtraOptions calls it to move a roof): the last roof event of each car
-     is its roof state.
+   - game+0xf5d300, a car's animation event ("roof:open", "roof:close", "doorLF:toggle"...; the
+     game calls it, and ExtraOptions and FH2 ANNA call it to move a part): the last event of each
+     part of each car is that part's state (the twelve parts of 0xC0FC, MATCHMAKING_API §5f).
    Only with the supported ExtraOptions active (FI_EO_NAME, fi_eo_sync_enabled):
    - the local car's state is read from the car itself: +0x51a1 is "headlights forced", +0x51a2
      their value (the game's own setters at game+0xf74ee0 / +0xf74ef0 write exactly those two
      bytes; ExtraOptions toggles them through the setters), so lights = 0 (the game's), 1
-     (forced on), 2 (forced off); the roof from its last event. It goes to the relay when it
-     changes and every second (carstate.c);
-   - another player's car, matched by position (carstate.c), gets its owner's headlights through
-     the same setters around the game's update and its roof through the same events.
+     (forced on), 2 (forced off); the roof from its last event; with FH2 ANNA loaded also its
+     other parts and its signals (+0x51bb hazards, +0x51bc left, +0x51bd right). It goes to the
+     relay when it changes and every second (carstate.c);
+   - another player's car (a ForzaCar of kind 2 or 5 at +0x4d08, the network's), matched by
+     position (carstate.c), gets its owner's headlights through the same setters around the
+     game's update (by day as the game draws them, OD-248 v1), its roof through the same events,
+     and with FH2 ANNA loaded here and there its other parts the same way and its signals
+     through their setters (game+0xf755c0 / +0xf76f10 / +0xf774e0) around the update.
    Without ExtraOptions none of that runs: a detour is one flag check, nothing is sent, nothing
    received is shown. */
 #include "infinity.h"
@@ -39,6 +43,9 @@
 #define CS_HEADLIGHT_MANUAL_RVA 0xf74ee0u
 #define CS_HEADLIGHT_VALUE_RVA 0xf74ef0u
 #define CS_LIGHTS_UPDATE_RVA 0xf5c900u
+#define CS_HAZARDS_RVA 0xf755c0u
+#define CS_LEFT_SIGNAL_RVA 0xf76f10u
+#define CS_RIGHT_SIGNAL_RVA 0xf774e0u
 #define CS_ANIMATION_DETAIL_RVA 0x16fbe90u
 #define CS_FIND_ANIMATION_EVENT_RVA 0x16fd4d0u
 #define CS_TARGET_VTABLE_RVA 0x2c5ce28u
@@ -171,25 +178,35 @@ static int cs_car_position(void *car, float out[3]) {
     return 1;
 }
 
-/* ------------------------------------------------------------- roof events */
+/* ------------------------------------------------------------- part events */
+
+/* The car's animatable parts as their animation events name them ("<part>:open", ":close",
+   ":toggle"; FH2 ANNA's names), in 0xC0FC's bit order (MATCHMAKING_API §5f): bit 0 the roof. */
+#define CS_PARTS 12
+#define CS_PART_HEADLIGHT_L 9
+#define CS_PART_HEADLIGHT_R 10
+static const char *const cs_part_names[CS_PARTS] = {"roof",    "hood",     "trunk",      "doorLF",
+                                                   "doorRF",  "doorLR",   "doorRR",     "storage",
+                                                   "storageM", "headlightL", "headlightR", "active_aero"};
+/* the order a remote car's parts are moved in: the pop-up lights last, since the first event a
+   car's animation graph gets puts the pop-ups it had up down again (FH2 ANNA's set_part) */
+static const unsigned char cs_part_order[CS_PARTS] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 9, 10};
 
 static struct {
     void *car, *animation;
-    int open;
+    unsigned open; /* parts bits */
     unsigned long long used_at;
-} cs_roofs[CS_ROOF_CARS];
+} cs_part_cars[CS_ROOF_CARS];
 static SRWLOCK cs_roof_lock = SRWLOCK_INIT;
 
-/* 0 not a roof event, 1 open, 2 close, 3 toggle. Every animation event of every car comes here
-   while the sync is on: one read of the name's first bytes (byte by byte only when those are
-   at the end of what is readable). */
-static int cs_roof_event(const char *event) {
-    char text[12];
+/* 0 not a part event, else 1 open, 2 close, 3 toggle, with the part's bit in *part. Every animation
+   event of every car comes here while the sync is on: one read of the name's first bytes (byte by
+   byte only when those are at the end of what is readable), and nothing more unless its first
+   letter starts a part's name. */
+static int cs_part_event(const char *event, int *part) {
+    char text[24];
     size_t n = 0;
     if (memory_read(event, text, sizeof(text) - 1)) {
-        if (!memory_equal(text, "roof:", 5)) {
-            return 0;
-        }
         while (n < sizeof(text) - 1 && text[n]) {
             ++n;
         }
@@ -199,48 +216,64 @@ static int cs_roof_event(const char *event) {
         }
     }
     text[n] = 0;
-    if (n < 9 || !memory_equal(text, "roof:", 5)) {
+    if (n < 6 || (text[0] != 'r' && text[0] != 'h' && text[0] != 't' && text[0] != 'd' && text[0] != 's' &&
+                  text[0] != 'a')) {
         return 0;
     }
-    return n == 9 && memory_equal(text + 5, "open", 5)    ? 1
-           : n == 10 && memory_equal(text + 5, "close", 6) ? 2
-           : n == 11 && memory_equal(text + 5, "toggle", 7) ? 3
-                                                          : 0;
+    for (int p = 0; p < CS_PARTS; ++p) {
+        size_t k = text_length(cs_part_names[p]);
+        if (n <= k + 1 || text[k] != ':' || !memory_equal(text, cs_part_names[p], k)) {
+            continue;
+        }
+        const char *action = text + k + 1;
+        size_t m = n - k - 1;
+        int kind = m == 4 && memory_equal(action, "open", 5)     ? 1
+                   : m == 5 && memory_equal(action, "close", 6)  ? 2
+                   : m == 6 && memory_equal(action, "toggle", 7) ? 3
+                                                                 : 0;
+        if (kind) {
+            *part = p;
+        }
+        return kind;
+    }
+    return 0;
 }
 
-static void cs_record_roof(void *car, int kind) {
+static void cs_record_part(void *car, int part, int kind) {
     void *animation = cs_car_animation(car);
     unsigned long long now = GetTickCount64();
     AcquireSRWLockExclusive(&cs_roof_lock);
     int slot = -1, oldest = 0;
     for (int i = 0; i < CS_ROOF_CARS; ++i) {
-        if (cs_roofs[i].car == car) {
+        if (cs_part_cars[i].car == car) {
             slot = i;
             break;
         }
-        if (cs_roofs[i].used_at < cs_roofs[oldest].used_at) {
+        if (cs_part_cars[i].used_at < cs_part_cars[oldest].used_at) {
             oldest = i;
         }
     }
-    if (slot < 0 || cs_roofs[slot].animation != animation) {
+    if (slot < 0 || cs_part_cars[slot].animation != animation) {
         slot = slot < 0 ? oldest : slot;
-        cs_roofs[slot].car = car;
-        cs_roofs[slot].animation = animation;
-        cs_roofs[slot].open = 0; /* a car (re)loaded comes with its roof closed */
+        cs_part_cars[slot].car = car;
+        cs_part_cars[slot].animation = animation;
+        cs_part_cars[slot].open = 0; /* a car (re)loaded comes with every part closed */
     }
-    cs_roofs[slot].open = kind == 1 ? 1 : kind == 2 ? 0 : !cs_roofs[slot].open;
-    cs_roofs[slot].used_at = now;
+    unsigned bit = 1u << part, open = cs_part_cars[slot].open;
+    int now_open = kind == 1 ? 1 : kind == 2 ? 0 : !(open & bit);
+    cs_part_cars[slot].open = now_open ? open | bit : open & ~bit;
+    cs_part_cars[slot].used_at = now;
     ReleaseSRWLockExclusive(&cs_roof_lock);
 }
 
-/* The roof of `car` as its last event left it (closed when none was seen). */
-static int cs_roof_open(void *car) {
+/* The parts of `car` as its last events left them (closed when none was seen). */
+static unsigned cs_parts_open(void *car) {
     void *animation = cs_car_animation(car);
-    int open = 0;
+    unsigned open = 0;
     AcquireSRWLockExclusive(&cs_roof_lock);
     for (int i = 0; i < CS_ROOF_CARS; ++i) {
-        if (cs_roofs[i].car == car) {
-            open = cs_roofs[i].animation == animation && cs_roofs[i].open;
+        if (cs_part_cars[i].car == car) {
+            open = cs_part_cars[i].animation == animation ? cs_part_cars[i].open : 0;
             break;
         }
     }
@@ -250,9 +283,9 @@ static int cs_roof_open(void *car) {
 
 static void cs_animation_event(void *car, const char *event) {
     if (fi_eo_sync_enabled() && car && event) {
-        int kind = cs_roof_event(event);
+        int part = 0, kind = cs_part_event(event, &part);
         if (kind) {
-            cs_record_roof(car, kind);
+            cs_record_part(car, part, kind);
         }
     }
     cs_animation_event_original(car, event);
@@ -260,11 +293,18 @@ static void cs_animation_event(void *car, const char *event) {
 
 /* -------------------------------------------------------- the local car */
 
-/* `car` is the one the game is updating right now: its two bytes are read directly. */
+/* Its signals from +0x51bb hazards, +0x51bc left, +0x51bd right: 0 off, 1 hazards, 2 left, 3 right. */
+static int cs_read_signals(const volatile unsigned char *car) {
+    unsigned char hazards = car[0x51bb], left = car[0x51bc], right = car[0x51bd];
+    return hazards || (left && right) ? 1 : left ? 2 : right ? 3 : 0;
+}
+
+/* `car` is the one the game is updating right now: its bytes are read directly. */
 static void cs_report_local(void *car) {
-    const volatile unsigned char *lights = (const volatile unsigned char *)car + 0x51a1;
-    unsigned char forced = lights[0], value = lights[1];
-    azimuth_carstate_local(forced ? (value ? 1 : 2) : 0, cs_roof_open(car));
+    const volatile unsigned char *bytes = (const volatile unsigned char *)car;
+    unsigned char forced = bytes[0x51a1], value = bytes[0x51a2];
+    unsigned parts = cs_parts_open(car);
+    azimuth_carstate_local(forced ? (value ? 1 : 2) : 0, (int)(parts & 1u), cs_read_signals(bytes), parts);
 }
 
 /* The local player's car, looked up once per frame (the car update's `frame` argument), and at
@@ -291,7 +331,8 @@ static void *cs_local_car_for(unsigned frame) {
 
 static struct {
     void *car, *animation;
-    int lights, roof;
+    int lights, signals;
+    unsigned parts;
 } cs_remote_cars[CS_REMOTE_CARS];
 
 /* What it last showed on `car` (a slot for it when `make`). */
@@ -312,24 +353,64 @@ static int cs_remote_slot(void *car, int make) {
     cs_remote_cars[i].car = car;
     cs_remote_cars[i].animation = 0;
     cs_remote_cars[i].lights = 0;
-    cs_remote_cars[i].roof = 0;
+    cs_remote_cars[i].signals = 0;
+    cs_remote_cars[i].parts = 0;
     return i;
+}
+
+/* A remote player's car is a ForzaCar of kind (+0x4d08) 2 or 5 (the network's; 0 is the local
+   player's, 1/4 the AI and traffic: carsync-mods.md §1). */
+static int cs_remote_kind(void *car) {
+    unsigned kind = 0;
+    return memory_read((unsigned char *)car + 0x4d08, &kind, sizeof(kind)) && (kind == 2 || kind == 5);
+}
+
+static void cs_write_signals(void *car, int signals) {
+    ((HeadlightSetter)(uintptr_t)(cs_game + CS_HAZARDS_RVA))(car, signals == 1);
+    ((HeadlightSetter)(uintptr_t)(cs_game + CS_LEFT_SIGNAL_RVA))(car, signals == 2);
+    ((HeadlightSetter)(uintptr_t)(cs_game + CS_RIGHT_SIGNAL_RVA))(car, signals == 3);
+}
+
+/* One part of a remote car to `open`: its open/close event, else its toggle (what the car has). */
+static void cs_move_part(void *car, void *animation, int part, int open) {
+    char name[24];
+    size_t k = text_length(cs_part_names[part]);
+    memory_copy(name, cs_part_names[part], k);
+    name[k] = ':';
+    const char *actions[2] = {open ? "open" : "close", "toggle"};
+    for (int a = 0; a < 2; ++a) {
+        size_t m = text_length(actions[a]);
+        memory_copy(name + k + 1, actions[a], m + 1);
+        if (cs_has_animation_event(animation, name)) {
+            ((AnimationDetail)(uintptr_t)(cs_game + CS_ANIMATION_DETAIL_RVA))(animation, 0);
+            ((AnimationEventFn)(uintptr_t)(cs_game + CS_ANIMATION_EVENT_RVA))(car, name);
+            return;
+        }
+    }
 }
 
 /* A player's car: its headlights as forced on its owner's screen (written around the game's
    update; when they change, the lights update game+0xf5c900 runs so they show at once, the
-   car's own update keeping them after), and its roof moved by the same animation events. */
-static void cs_show_remote(void *car, int lights, int open, int after, float dt) {
+   car's own update keeping them after; by day they look as the game draws them: OD-248 v1 has no
+   daylight trick on remote cars); its roof, and with FH2 ANNA on both sides its other parts,
+   moved by the same animation events; with FH2 ANNA its signals, written around the update as the headlights are (the GameAI loop
+   0x140843010 rewrites the three bytes of the cars it drives each tick). */
+static void cs_show_remote(void *car, const FiCarWanted *w, int after, float dt) {
     int i = cs_remote_slot(car, 1);
+    int lights = w->lights, signals = w->has_parts ? (int)w->signals : 0;
     if (lights) {
         ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_VALUE_RVA))(car, lights == 1);
         ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_MANUAL_RVA))(car, 1);
     } else if (cs_remote_cars[i].lights) {
         ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_MANUAL_RVA))(car, 0); /* back to the game's own */
     }
+    if (signals || cs_remote_cars[i].signals) {
+        cs_write_signals(car, signals); /* off once when they stop */
+    }
     if (!after) {
         return;
     }
+    cs_remote_cars[i].signals = signals;
     if (lights != cs_remote_cars[i].lights) {
         void *presentation, *list;
         if (memory_read_pointer((unsigned char *)car + 0x4d38, &presentation) &&
@@ -341,37 +422,59 @@ static void cs_show_remote(void *car, int lights, int open, int after, float dt)
     void *animation = cs_car_animation(car);
     if (animation != cs_remote_cars[i].animation) {
         cs_remote_cars[i].animation = animation;
-        cs_remote_cars[i].roof = 0; /* a car (re)loaded comes closed */
+        cs_remote_cars[i].parts = 0; /* a car (re)loaded comes closed */
     }
-    if (open != cs_remote_cars[i].roof) {
-        const char *event = open ? "roof:open" : "roof:close";
-        if (animation && cs_has_animation_event(animation, event)) {
-            ((AnimationDetail)(uintptr_t)(cs_game + CS_ANIMATION_DETAIL_RVA))(animation, 0);
-            ((AnimationEventFn)(uintptr_t)(cs_game + CS_ANIMATION_EVENT_RVA))(car, event);
+    unsigned wanted = w->parts & FI_CS_PARTS_MASK;
+    for (int k = 0; k < CS_PARTS; ++k) {
+        int p = cs_part_order[k];
+        unsigned bit = 1u << p;
+        if ((wanted ^ cs_remote_cars[i].parts) & bit) {
+            if (animation) {
+                cs_move_part(car, animation, p, (wanted & bit) != 0);
+            }
+            cs_remote_cars[i].parts ^= bit;
         }
-        cs_remote_cars[i].roof = open;
     }
     int detail;
-    if (open && animation && memory_read((unsigned char *)animation + 0x10, &detail, 4) && detail != 0) {
+    if (wanted && animation && memory_read((unsigned char *)animation + 0x10, &detail, 4) && detail != 0) {
         ((AnimationDetail)(uintptr_t)(cs_game + CS_ANIMATION_DETAIL_RVA))(animation, 0);
     }
 }
 
-static int cs_remote_state(void *car, int *lights, int *open) {
+/* The game's own again on a car no longer shown as a player's. */
+static void cs_forget_remote(void *car) {
+    int i = cs_remote_slot(car, 0);
+    if (i < 0) {
+        return;
+    }
+    if (cs_remote_cars[i].lights) {
+        ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_MANUAL_RVA))(car, 0);
+    }
+    if (cs_remote_cars[i].signals) {
+        cs_write_signals(car, 0);
+    }
+    cs_remote_cars[i].car = 0;
+}
+
+static int cs_remote_state(void *car, FiCarWanted *wanted) {
     if (!azimuth_carstate_any()) {
+        return 0;
+    }
+    if (!cs_remote_kind(car)) {
+        cs_forget_remote(car); /* only the network's cars show another player's state */
         return 0;
     }
     float position[3];
     int known = azimuth_carstate_needs_position(car) && cs_car_position(car, position);
-    if (!azimuth_carstate_wanted(car, known ? position : 0, lights, open)) {
-        int i = cs_remote_slot(car, 0);
-        if (i >= 0) {
-            if (cs_remote_cars[i].lights) {
-                ((HeadlightSetter)(uintptr_t)(cs_game + CS_HEADLIGHT_MANUAL_RVA))(car, 0);
-            }
-            cs_remote_cars[i].car = 0;
-        }
+    if (!azimuth_carstate_wanted(car, known ? position : 0, wanted)) {
+        cs_forget_remote(car);
         return 0;
+    }
+    /* FH2 ANNA's parts and signals only while it is loaded here (§5f layer 3) */
+    if (wanted->has_parts && !fi_anna_loaded()) {
+        wanted->has_parts = 0;
+        wanted->signals = 0;
+        wanted->parts = (unsigned)wanted->roof;
     }
     return 1;
 }
@@ -385,14 +488,14 @@ static void cs_car_update(void *self, float dt, float frame_dt, unsigned frame) 
         return;
     }
     int owned = cs_local_car_for(frame) == self;
-    int lights = 0, open = 0;
-    int remote = !owned && cs_remote_state(self, &lights, &open);
+    FiCarWanted wanted = {0, 0, 0, 0, 0};
+    int remote = !owned && cs_remote_state(self, &wanted);
     if (remote) {
-        cs_show_remote(self, lights, open, 0, dt);
+        cs_show_remote(self, &wanted, 0, dt);
     }
     cs_car_update_original(self, dt, frame_dt, frame);
     if (remote) {
-        cs_show_remote(self, lights, open, 1, dt);
+        cs_show_remote(self, &wanted, 1, dt);
     }
     if (owned) {
         cs_report_local(self);
