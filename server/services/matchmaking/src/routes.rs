@@ -875,6 +875,9 @@ fn announced(mm: &Mm, c: &Caller, hosted: &db::Hosted) -> Result<WorldAnnounced,
             .iter()
             .map(|p| punch(mm, &RelayGrantHost::Xuid(c.xuid.to_string()), p))
             .collect::<Result<Vec<_>, _>>()?,
+        // CR-L53 (§5f, DEDICATED_SERVER.md §4.3): the host holds no grant; its set's sync ids
+        // reach its world through `world.context` `world.hostSync`.
+        host_sync: crate::sync::SyncRegistry::builtin().ids(&hosted.world.row.mods),
     })
 }
 
@@ -1301,6 +1304,7 @@ fn claims(
     exp: i64,
     relay: Option<&crate::config::Relay>,
     voice_blocked_until: Option<UnixMs>,
+    mods: &[ModEntry],
 ) -> RelayGrantClaims {
     RelayGrantClaims {
         v: 1,
@@ -1323,6 +1327,9 @@ fn claims(
         role: role.to_owned(),
         iat,
         exp,
+        // CR-L53 (§5f): the registry ids of this seat's declared set (`mm_grant.mods`), never
+        // the other side's; omitted when none.
+        sync: crate::sync::SyncRegistry::builtin().ids(mods),
         // CR-S67: Unix seconds, the stored millisecond end rounded up to the second.
         voice_blocked_until: voice_blocked_until.map(|u| (u.millis() + 999).div_euclid(1000)),
     }
@@ -1410,6 +1417,7 @@ pub(crate) fn punch(mm: &Mm, host: &RelayGrantHost, p: &PunchRow) -> Result<Punc
                 exp,
                 relay,
                 p.voice_blocked_until,
+                &p.mods,
             ),
             if p.state == "kicked" {
                 None
@@ -1457,6 +1465,7 @@ fn grant_body(mm: &Mm, c: &Caller, g: &GrantIssued) -> Result<Grant, ApiError> {
                 exp,
                 relay,
                 g.voice_blocked_until,
+                &g.mods,
             ),
             g.udp_proof_key.as_ref(),
         )?,
@@ -1796,6 +1805,7 @@ fn seat_answer(mm: &Mm, c: &Caller, v: &SeatView) -> Result<SeatAnswer, ApiError
                     exp,
                     pair,
                     g.voice_blocked_until,
+                    &g.mods,
                 ),
                 g.udp_proof_key.as_ref(),
             )?;
@@ -2043,6 +2053,44 @@ mod tests {
         }
     }
 
+    /// CR-L53 (§5f): a grant's `sync` is the registry ids of that seat's declared set; a seat
+    /// with none keeps today's bytes.
+    #[test]
+    fn a_grant_signs_the_sync_ids_of_its_seat_s_declared_set() {
+        let entry = |id: &str| ModEntry {
+            id: id.into(),
+            version: "1".into(),
+            fingerprint: "a".repeat(64),
+        };
+        let at = |mods: &[ModEntry]| {
+            claims(
+                Uuid::from_u128(1),
+                Uuid::from_u128(2),
+                Uuid::from_u128(3),
+                2_535_100_000_000_002,
+                "free",
+                RelayGrantHost::Xuid("2535100000000001".into()),
+                "joiner",
+                10,
+                70,
+                None,
+                None,
+                mods,
+            )
+        };
+        assert_eq!(at(&[]).sync, None);
+        assert!(
+            !serde_json::to_string(&at(&[entry("other")]))
+                .unwrap()
+                .contains("sync")
+        );
+        assert_eq!(
+            at(&[entry("fh2-anna"), entry("nitro"), entry("underglow")]).sync,
+            Some(vec![1, 2])
+        );
+        assert_eq!(at(&[entry("underglow")]).sync, Some(vec![1]));
+    }
+
     #[test]
     fn host_ip_text_and_relay_times() {
         assert_eq!(
@@ -2174,6 +2222,7 @@ mod diagnostic_tests {
             relay_key: None,
             transport: "direct".into(),
             voice_blocked_until: None,
+            mods: Vec::new(),
         };
         tracing::subscriber::with_default(subscriber, || {
             let span = tracing::info_span!(

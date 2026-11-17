@@ -203,6 +203,8 @@ fn announced(mm: &Mm, host: &WorldsHost, hosted: &Hosted) -> Result<WorldAnnounc
             .iter()
             .map(|p| crate::routes::punch(mm, &claim, p))
             .collect::<Result<Vec<_>, _>>()?,
+        // CR-L53 (§5f): an official world has no host player, so no `hostSync`.
+        host_sync: None,
     })
 }
 
