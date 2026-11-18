@@ -983,6 +983,7 @@ public sealed partial class ShellViewModel
     {
         ModSettingsChangedException => S["mods.settings_changed"],
         ModUpdatePlanException failed => UpdatePlanFailureText(failed),
+        ModUnmetDependencyException unmet => UnmetDependencyText(unmet),
         ModException refused when RefusalText(refused) is { } named => named, // batch 1118: the mod it is about, never a generic failure
         HttpRequestException or OperationCanceledException => S["mods.download_failed"],
         ModException mod => ModErrorText(mod.Code),

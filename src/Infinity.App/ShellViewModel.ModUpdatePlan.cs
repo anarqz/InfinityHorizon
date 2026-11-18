@@ -21,8 +21,20 @@ public sealed partial class ShellViewModel
 
     /// <summary>A dependency refusal that names its mod ("Underglow is on and works only with version 1.2.0 of this mod…"), or null.</summary>
     private string? RefusalText(ModException? refused) => refused is not { Code: ModErrors.Dependency, Related: { } related } ? null
-        : S.Format(refused.RelatedIsDependent ? "mods.refused_dependent" : "mods.refused_dependency",
-            ("mod", NameOf(related)), ("versions", string.Join(" / ", refused.RelatedVersions)));
+        : S.Format((refused.RelatedIsDependent, refused.RelatedProblem) switch
+        {
+            (true, ModRelated.Settings) => "mods.refused_dependent_settings",
+            (true, _) => "mods.refused_dependent",
+            // another version than the mod accepts, and none installed or offered by the catalog: nothing the player can install now
+            (false, ModRelated.Version) => "mods.refused_dependency_version",
+            (false, ModRelated.Settings) => "mods.refused_dependency_settings",
+            (false, ModRelated.Changed) => "mods.refused_dependency_changed",
+            _ => "mods.refused_dependency",
+        }, ("mod", NameOf(related)), ("versions", string.Join(" / ", refused.RelatedVersions)));
+
+    /// <summary>A launch refused for an enabled mod whose dependency is missing, off or another version: both named, and what to do.</summary>
+    private string UnmetDependencyText(ModUnmetDependencyException unmet) => S.Format("mods.launch_unmet_dependency",
+        ("mod", NameOf(unmet.Mod)), ("dependency", NameOf(unmet.Dependency)), ("versions", string.Join(" / ", unmet.Versions)));
 
     /// <summary>Why an update card waits: the named refusal, else its category's sentence.</summary>
     private string UpdateBlockerText(ModCardFacts fact) => RefusalText(fact.Refusal) ?? ModErrorText(fact.Blocker!);
@@ -45,6 +57,7 @@ public sealed partial class ShellViewModel
         var text = S.Format("mods.update_plan_failed", ("mod", NameOf(failed.Mod)), ("reason", reason));
         if (failed.NotChanged.Count > 0) text += " " + S.Format("mods.update_plan_not_changed", ("mods", string.Join(", ", failed.NotChanged.Select(NameOf))));
         if (failed.TurnedOff.Count > 0) text += " " + S.Format("mods.update_plan_turned_off", ("mods", string.Join(", ", failed.TurnedOff.Select(NameOf))));
+        if (failed.StillOn.Count > 0) text += " " + S.Format("mods.update_plan_still_on", ("mods", string.Join(", ", failed.StillOn.Select(NameOf))));
         return text;
     }
 

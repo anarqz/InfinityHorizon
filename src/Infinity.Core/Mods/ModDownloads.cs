@@ -15,19 +15,53 @@ public class ModException(string message, string code = ModErrors.Failed, Except
     public IReadOnlyList<string> RelatedVersions { get; init; } = [];
     /// <summary>True when <see cref="Related"/> is an enabled mod that depends on the one changed (and does not accept its new version).</summary>
     public bool RelatedIsDependent { get; init; }
+    /// <summary>For a dependency (<see cref="RelatedIsDependent"/> false): what is wrong with it, one of <see cref="ModRelated"/>.</summary>
+    public string? RelatedProblem { get; init; }
+}
+
+/// <summary>What is wrong with a dependency a refusal names (<see cref="ModException.RelatedProblem"/>).</summary>
+public static class ModRelated
+{
+    /// <summary>Not installed (or only in a retired format, which satisfies nothing).</summary>
+    public const string Missing = "missing";
+    /// <summary>Installed and turned off.</summary>
+    public const string Off = "off";
+    /// <summary>
+    /// Another version than the ones accepted, and none of them installed or (in an update made together) planned: the catalog does not
+    /// offer one the mod accepts.
+    /// </summary>
+    public const string Version = "version";
+    /// <summary>Its settings (or, in a plan, those its update will write) are not the values the mod requires.</summary>
+    public const string Settings = "settings";
+    /// <summary>Its files changed outside the launcher.</summary>
+    public const string Changed = "changed";
 }
 
 /// <summary>
 /// One step of an update made together with its dependencies' or dependents' updates (<see cref="ManagedModFiles.UpdateTogetherAsync"/>)
-/// failed: <see cref="Mod"/> was not updated, the steps after it (<see cref="NotChanged"/>) were not touched, and the mods
-/// <see cref="TurnedOff"/> were disabled because what they need had already been updated.
+/// failed: <see cref="Mod"/> was not updated, the steps after it (<see cref="NotChanged"/>) were not touched, the mods
+/// <see cref="TurnedOff"/> were disabled because what they need had already been updated, and <see cref="StillOn"/> are such mods that
+/// could not be turned off (a launch then refuses them, <see cref="ModUnmetDependencyException"/>).
 /// </summary>
-public sealed class ModUpdatePlanException(string mod, IReadOnlyList<string> notChanged, IReadOnlyList<string> turnedOff, Exception inner)
+public sealed class ModUpdatePlanException(string mod, IReadOnlyList<string> notChanged, IReadOnlyList<string> turnedOff, IReadOnlyList<string> stillOn, Exception inner)
     : ModException("update of " + mod + " failed: " + inner.Message, (inner as ModException)?.Code ?? ModErrors.Failed, inner)
 {
     public string Mod { get; } = mod;
     public IReadOnlyList<string> NotChanged { get; } = notChanged;
     public IReadOnlyList<string> TurnedOff { get; } = turnedOff;
+    public IReadOnlyList<string> StillOn { get; } = stillOn;
+}
+
+/// <summary>
+/// A launch refused because the enabled mod <see cref="Mod"/> needs <see cref="Dependency"/> at one of <see cref="Versions"/>, and that
+/// mod is missing, off or another version (left so by an update stopped between two steps, for example). Never a silent launch without it.
+/// </summary>
+public sealed class ModUnmetDependencyException(string mod, string dependency, IReadOnlyList<string> versions)
+    : ModException("enabled mod " + mod + " needs " + dependency + " " + string.Join("/", versions), ModErrors.Dependency)
+{
+    public string Mod { get; } = mod;
+    public string Dependency { get; } = dependency;
+    public IReadOnlyList<string> Versions { get; } = versions;
 }
 
 /// <summary>The stable categories of <see cref="ModException.Code"/>.</summary>

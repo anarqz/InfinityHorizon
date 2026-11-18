@@ -107,7 +107,8 @@ public sealed partial class ManagedModFiles
 
     /// <param name="planned">
     /// An update made together with others (<see cref="UpdateTogetherAsync"/>): a dependency the plan updates is judged by its planned
-    /// manifest (its version, and its installation enabled); its files and settings are checked when its own step runs.
+    /// manifest: its version, its installation enabled, and the settings its update will write (<see cref="PlannedSettings"/>); its files
+    /// are checked when its own step runs.
     /// </param>
     private void CheckDependencies(ModManifest manifest, HashSet<string> visiting, IReadOnlyDictionary<string, ModManifest>? planned)
     {
@@ -119,25 +120,23 @@ public sealed partial class ManagedModFiles
             // OD-125/127: ExtraOptions comes with Infinity (ExtraOptions.Infinity), always on; never a managed mod to check
             if (id == BuiltInExtraOptions) continue;
             var versions = dependency.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray();
-            ModException Refused(string message) => new(message, ModErrors.Dependency) { Related = id, RelatedVersions = versions };
+            ModException Refused(string message, string problem) => new(message, ModErrors.Dependency) { Related = id, RelatedVersions = versions, RelatedProblem = problem };
             if (id is not null && planned is not null && planned.TryGetValue(id, out var next))
             {
-                if (!versions.Contains(next.Version) || ReceiptFor(id) is not { Enabled: true }) throw Refused("required dependency is disabled or incompatible");
+                if (ReceiptFor(id) is not { Enabled: true }) throw Refused("required dependency is disabled or incompatible", ModRelated.Off);
+                if (!versions.Contains(next.Version)) throw Refused("required dependency is disabled or incompatible", ModRelated.Version);
                 CheckDependencies(next, visiting, planned);
+                CheckRequiredSettings(dependency, PlannedSettings(next), Refused);
                 continue;
             }
-            var target = installed.SingleOrDefault(m => m.Id == id) ?? throw Refused("required dependency is not managed");
             // OD-232: an installation in a retired format satisfies nothing; it is only there to be removed
-            if (target.Retired || !versions.Contains(target.Version)
-                || Receipt(target) is not { Enabled: true } || !VerifiedOnce(target)) throw Refused("required dependency is disabled or incompatible");
+            var target = installed.SingleOrDefault(m => m.Id == id && !m.Retired) ?? throw Refused("required dependency is not managed", ModRelated.Missing);
+            if (Receipt(target) is not { Enabled: true }) throw Refused("required dependency is disabled or incompatible", ModRelated.Off);
+            if (!versions.Contains(target.Version)) throw Refused("required dependency is disabled or incompatible", ModRelated.Version);
+            if (!VerifiedOnce(target)) throw Refused("required dependency is disabled or incompatible", ModRelated.Changed);
             CheckDependencies(target, visiting, planned);
             if (dependency.TryGetProperty("settings", out var settings) && settings.GetArrayLength() > 0)
-            {
-                var values = ReadSettings(target).Values;
-                foreach (var setting in settings.EnumerateArray())
-                    if (!values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
-                        || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw Refused("required dependency settings differ");
-            }
+                CheckRequiredSettings(dependency, ReadSettings(target).Values, Refused);
         }
         if (manifest.Document.TryGetProperty("conflicts", out var conflicts))
             foreach (var conflict in conflicts.EnumerateArray())
@@ -151,6 +150,45 @@ public sealed partial class ManagedModFiles
             if (other.Document.TryGetProperty("conflicts", out var reverse) && reverse.EnumerateArray().Any(c => c.GetString() == manifest.Id))
                 throw new ModException("an enabled mod conflicts with this mod", ModErrors.Conflict);
         visiting.Remove(manifest.Id);
+    }
+
+    /// <summary>The values a dependency entry's <c>settings</c> requires, compared with <paramref name="values"/>; a difference is refused.</summary>
+    private static void CheckRequiredSettings(JsonElement dependency, IReadOnlyDictionary<string, JsonElement> values, Func<string, string, ModException> refused)
+    {
+        if (!dependency.TryGetProperty("settings", out var settings) || settings.ValueKind != JsonValueKind.Array) return;
+        foreach (var setting in settings.EnumerateArray())
+            if (!values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
+                || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw refused("required dependency settings differ", ModRelated.Settings);
+    }
+
+    /// <summary>
+    /// The settings <paramref name="next"/>'s update will leave (nothing is written): the player's INI at its settings path, or its
+    /// defaults, with its locks applied, as <see cref="Update"/> writes them. A mod without settings has none.
+    /// </summary>
+    private IReadOnlyDictionary<string, JsonElement> PlannedSettings(ModManifest next)
+    {
+        if (next.ConfigPath is not { } config) return new Dictionary<string, JsonElement>();
+        var path = Target("azimuth", config);
+        return new ManifestIni(next, SettingsBytes(next, File.Exists(path) ? File.ReadAllBytes(path) : null)).Values;
+    }
+
+    /// <summary>
+    /// In a plan: the enabled mods the plan does not update that depend on <paramref name="next"/> with required settings get the values
+    /// its update will write (the plan's own members are checked by their <see cref="CheckDependencies"/>). Refused naming the dependent.
+    /// </summary>
+    private void CheckDependentSettings(ModManifest next, Dictionary<string, ModManifest> planned)
+    {
+        IReadOnlyDictionary<string, JsonElement>? values = null;
+        foreach (var dependent in InstalledManifests())
+        {
+            if (planned.ContainsKey(dependent.Id) || Receipt(dependent) is not { Enabled: true }) continue;
+            foreach (var dependency in dependent.Document.GetProperty("dependencies").EnumerateArray().Where(d => d.GetProperty("id").GetString() == next.Id))
+            {
+                var versions = dependency.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray();
+                CheckRequiredSettings(dependency, values ??= PlannedSettings(next), (_, _) => new ModException("enabled dependent requires this setting", ModErrors.Dependency)
+                { Related = dependent.Id, RelatedVersions = versions, RelatedIsDependent = true, RelatedProblem = ModRelated.Settings });
+            }
+        }
     }
 
     /// <summary>
@@ -280,6 +318,8 @@ public sealed partial class ManagedModFiles
         _ = hardcore;
         var warnings = new List<string>();
         var enabled = new List<ModManifest>();
+        var known = new Dictionary<string, (bool Enabled, ModManifest Manifest)>(StringComparer.OrdinalIgnoreCase);
+        var unreadable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var gate = Lock(allowRecovery: true))
         {
             foreach (var path in Directory.EnumerateFiles(BackupRoot, "*.receipt.json").ToArray())
@@ -291,7 +331,8 @@ public sealed partial class ManagedModFiles
                     receipt = ReadReceipt(id) ?? throw new ModException("receipt vanished", ModErrors.Recovery);
                     manifest = SnapshotFor(receipt);
                 }
-                catch (Exception error) when (IsStateError(error)) { warnings.Add(id + ": unreadable " + Code(error)); continue; } // shown on Mods, never a Play blocker
+                catch (Exception error) when (IsStateError(error)) { warnings.Add(id + ": unreadable " + Code(error)); unreadable.Add(id); continue; } // shown on Mods, never a Play blocker
+                known[id] = (receipt.Enabled, manifest);
                 if (!receipt.Enabled) continue;
                 // owner 2026-11-10 (3.1.1): a launch prepares only its own game's mods; another game's are neither read further nor written
                 if (game is not null && manifest.ModsGame != game) continue;
@@ -310,6 +351,14 @@ public sealed partial class ManagedModFiles
                 Execute(new(manifest.Id + ".receipt.json", receipt, [new("azimuth", config, settings.SourceHash, Store(after))]), null);
             }
         }
+        // batch 1118 review: an enabled mod whose dependency is missing, off or another version (an update stopped between two of its
+        // steps, for example) refuses the launch naming both; a dependency that could not be read is the warning above, and drift is never
+        // a refusal here (it stays a warning)
+        foreach (var manifest in enabled.Where(m => !m.Retired))
+            foreach (var need in manifest.Dependencies)
+                if (need.Id != BuiltInExtraOptions && !unreadable.Contains(need.Id)
+                    && (!known.TryGetValue(need.Id, out var dependency) || !dependency.Enabled || dependency.Manifest.Retired || !need.Versions.Contains(dependency.Manifest.Version)))
+                    throw new ModUnmetDependencyException(manifest.Id, need.Id, need.Versions);
         var multiplayer = enabled.Where(m => ModMultiplayer.AffectsMultiplayer(m) && (game is null || m.ModsGame == game)).ToArray();
         var retired = enabled.Where(ModLaunchPreparation.BlocksOnline).ToArray();
         if (warnings.Any(w => w.Contains(": unreadable", StringComparison.Ordinal)))

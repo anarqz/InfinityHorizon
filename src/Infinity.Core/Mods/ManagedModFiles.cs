@@ -277,6 +277,8 @@ public sealed partial class ManagedModFiles
     public static IReadOnlyList<ModManifest> UpdatePlan(ModManifest next, IReadOnlyList<ModManifest> catalog, IReadOnlyList<ModInstallation> installed)
     {
         ArgumentNullException.ThrowIfNull(next); ArgumentNullException.ThrowIfNull(catalog); ArgumentNullException.ThrowIfNull(installed);
+        // a mod of the player's own files updates through its own set-up pane, alone: its card shows its own checks' refusal
+        if (next.IsExternal) return [next];
         ModManifest? Have(string id) => installed.FirstOrDefault(i => i.Id == id && i.Problem is null)?.Manifest;
         // the catalog's other version of an installed mod (as the Mods page decides an update), one it can install
         ModManifest? Offered(string id) => Have(id) is { Retired: false } current && catalog.FirstOrDefault(m => m.Id == id) is { } listed
@@ -306,22 +308,32 @@ public sealed partial class ManagedModFiles
 
     /// <summary>
     /// Whether the updates of <paramref name="plan"/>, made together, leave every enabled mod's dependencies met (nothing is written): each
-    /// update's own checks with the plan's other mods at their new versions. Throws the first refusal, which names the mod it is about.
+    /// update's own checks with the plan's other mods at their new versions, so that a plan stops between two steps only on I/O. Throws the
+    /// first refusal, which names the mod it is about.
     /// </summary>
-    public void CheckUpdatePlan(IReadOnlyCollection<ModManifest> plan)
+    /// <param name="hardcore">The selected profile is Hardcore: an enabled member must be allowed there (<see cref="CheckProfile"/>).</param>
+    public void CheckUpdatePlan(IReadOnlyCollection<ModManifest> plan, bool hardcore = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
         var planned = plan.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        // OD-233: nothing lands beside the old flat layout (as InstallFrom refuses for every step)
+        if (ExtraOptionsLayout.NeedsMigration(_azimuth)) throw new ModException("the mods folder must move to the per-game layout first", ModErrors.Layout);
         foreach (var next in UpdateOrder(plan))
         {
+            ModException About(ModException error) => error.Related is null ? new ModException(error.Message, error.Code, error) { Related = next.Id } : error;
+            try { RejectBuiltInFiles(next); }
+            catch (ModException error) { throw About(error); }
             var installed = ReadReceipt(next.Id) ?? throw new ModException("mod is not installed") { Related = next.Id };
             if (installed.ManifestHash == next.Digest) throw new ModException("this version is already installed") { Related = next.Id };
             if (SnapshotFor(installed).Retired) throw new ModException("remove the retired installation first", ModErrors.Retired) { Related = next.Id };
             if (DriftOf(installed, cached: ForDisplay) is { Count: > 0 }) throw new ModException("files changed outside the launcher", ModErrors.Drift) { Related = next.Id };
             if (!next.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported) { Related = next.Id };
             if (!installed.Enabled) continue; // a disabled mod stays disabled across its update: nothing it needs is checked now
+            try { CheckProfile(next, hardcore); }
+            catch (ModException error) { throw About(error); }
             CheckDependencies(next, new HashSet<string>(StringComparer.OrdinalIgnoreCase), planned);
             CheckDependents(next.Id, next, planned);
+            CheckDependentSettings(next, planned);
         }
     }
 
@@ -351,9 +363,14 @@ public sealed partial class ManagedModFiles
         IProgress<string>? progress = null, bool hardcore = false)
     {
         var ordered = UpdateOrder(plan);
-        // every package is checked before anything changes (a package that does not match its pins stops the plan here)
-        foreach (var next in ordered) _ = VerifyPackages(next, packages.TryGetValue(next.Id, out var own) ? own : []);
-        CheckUpdatePlan(ordered);
+        // everything a step checks is checked for every step before the first one runs, so a plan stops half way only on I/O: each
+        // package against its pins and its own mod.json (OD-126), the files no mod may write, then the plan as a whole (Hardcore included)
+        foreach (var next in ordered)
+        {
+            RejectBuiltInFiles(next);
+            CheckExtraOptionsPackage(next, VerifyPackages(next, packages.TryGetValue(next.Id, out var own) ? own : []));
+        }
+        CheckUpdatePlan(ordered, hardcore);
         var planned = ordered.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
         for (var step = 0; step < ordered.Count; step++)
         {
@@ -362,36 +379,66 @@ public sealed partial class ManagedModFiles
             catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException)
             {
                 var notChanged = ordered.Skip(step + 1).Select(m => m.Id).ToArray();
-                throw new ModUpdatePlanException(next.Id, notChanged, step == 0 ? [] : TurnOffUnmet(), error);
+                var (off, stillOn) = step == 0 ? ([], []) : TurnOffUnmet(ordered.Take(step).Select(m => m.Id).ToArray());
+                throw new ModUpdatePlanException(next.Id, notChanged, off, stillOn, error);
             }
         }
     }
 
     /// <summary>
-    /// After a step of a plan failed: enabled mods whose dependencies an earlier step changed and no longer meets are turned off (a mod is
-    /// never left on beside a dependency version it does not accept). What cannot be turned off stays, and is not named.
+    /// After a step of a plan failed: the enabled mods that depend, directly or through other mods, on the steps already
+    /// <paramref name="applied"/>, and whose dependencies are no longer met (a dependency off or at a version they do not accept, or one of
+    /// these mods itself), are turned off, dependents first, so a mod is never left on beside a dependency it does not accept. Every other
+    /// mod is left alone (one with drift of its own included). Those that could not be turned off are returned too (a launch refuses them).
     /// </summary>
-    private string[] TurnOffUnmet()
+    private (string[] TurnedOff, string[] StillOn) TurnOffUnmet(IReadOnlyCollection<string> applied)
     {
-        var turnedOff = new List<string>();
-        for (var changed = true; changed;)
+        var receipts = new Dictionary<string, (bool Enabled, ModManifest Manifest)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var manifest in InstalledManifests())
+            try { if (ReadReceipt(manifest.Id) is { } receipt && receipt.ManifestHash == manifest.Digest) receipts[manifest.Id] = (receipt.Enabled, manifest); }
+            catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { }
+        var enabled = receipts.Values.Where(r => r.Enabled).Select(r => r.Manifest).ToArray();
+        // the mods that depend on an applied step, through every level
+        var affected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var grew = true; grew;)
         {
-            changed = false;
-            foreach (var manifest in InstalledManifests())
+            grew = false;
+            foreach (var mod in enabled)
+                if (!affected.Contains(mod.Id) && !applied.Contains(mod.Id, StringComparer.OrdinalIgnoreCase)
+                    && mod.Dependencies.Any(d => applied.Contains(d.Id, StringComparer.OrdinalIgnoreCase) || affected.Contains(d.Id)))
+                    grew |= affected.Add(mod.Id);
+        }
+        // of those, the ones whose needs are no longer met: a dependency off or another version, or one of them (followed through)
+        var unmet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var grew = true; grew;)
+        {
+            grew = false;
+            foreach (var mod in enabled.Where(m => affected.Contains(m.Id) && !unmet.Contains(m.Id)))
+                if (mod.Dependencies.Any(d => d.Id != BuiltInExtraOptions && (unmet.Contains(d.Id)
+                        || !receipts.TryGetValue(d.Id, out var dependency) || !dependency.Enabled || !d.Versions.Contains(dependency.Manifest.Version))))
+                    grew |= unmet.Add(mod.Id);
+        }
+        var turnedOff = new List<string>(); var stillOn = new List<string>();
+        if (unmet.Count == 0) return ([], []);
+        // dependents first: each one's own enabled dependents inside the set are already off when it is turned off
+        var order = UpdateOrder(enabled.Where(m => unmet.Contains(m.Id)).ToArray()).Reverse().ToArray();
+        try
+        {
+            using (Lock())
             {
-                try
+                foreach (var mod in order)
                 {
-                    if (Receipt(manifest) is not { Enabled: true }) continue;
-                    try { CheckDependencies(manifest); continue; }
-                    catch (ModException refused) when (refused.Code == ModErrors.Dependency) { }
-                    using (Lock()) if (!SetEnabledLocked(manifest, false, null, hardcore: false)) continue;
-                    turnedOff.Add(manifest.Id); changed = true;
+                    try { if (SetEnabledLocked(mod, false, null, hardcore: false)) turnedOff.Add(mod.Id); }
+                    catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { stillOn.Add(mod.Id); }
                 }
-                catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { }
+                if (turnedOff.Count > 0) ReconcileWineOverrides();
             }
         }
-        if (turnedOff.Count > 0) { try { using (Lock()) ReconcileWineOverrides(); } catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { } }
-        return [.. turnedOff];
+        catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException)
+        {
+            stillOn.AddRange(order.Select(m => m.Id).Where(id => !turnedOff.Contains(id) && !stillOn.Contains(id)));
+        }
+        return ([.. turnedOff], [.. stillOn]);
     }
 
     public void InstallVerifiedPackage(ModManifest manifest, byte[] package, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
