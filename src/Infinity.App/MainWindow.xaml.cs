@@ -64,7 +64,9 @@ public partial class MainWindow : Window
         IsVisibleChanged += (_, _) => Shown();
         StateChanged += (_, _) => Shown();
         Closing += (_, e) => { if (vm.ModOperationBusy) e.Cancel = true; };
-        Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); vm.Dispose(); };
+        // T-1118: after the window is gone and the view model disposed the process must end; if the shutdown never runs (the window's
+        // thread held), the guard ends it and says so
+        Closed += (_, _) => { PasswordBox.Clear(); DeletionPasswordBox.Clear(); try { vm.Dispose(); } finally { App.GuardExit(0, "its window closed"); } };
         PreviewKeyDown += OnBusyKey; // owner 2026-11-08: while the busy overlay is up no key reaches the page (Esc never cancels a write)
         PreviewMouseUp += OnBusyMouse;
         SetUpScreenLock(); // owner 2026-11-10: the lock blocks clicks and keys without greying the content

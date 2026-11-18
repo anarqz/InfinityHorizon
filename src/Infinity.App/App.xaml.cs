@@ -89,12 +89,13 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// T-1118: on 2026-11-17 the launcher logged "exit: window closed" at 17:13:34 and its process was still there the next morning, with
-    /// no window. Once the exit line is written nothing of the launcher is left to do, so a process that is still running
-    /// <see cref="ExitGrace"/> later (a thread that keeps it alive, a wait in the runtime's shutdown) says so in the log and ends itself.
-    /// The guard is a background thread: it never keeps the process alive, and a normal exit (under 0.1 s) ends it first.
+    /// T-1118: on 2026-11-18 a launcher process started the day before was still running with no window and about 20 GB: its window had
+    /// been closed while its thread was held (a notify-all storm), so the application's shutdown never ran and no exit line was written.
+    /// Once the window is closed (and the view model disposed), or the exit line written, nothing of the launcher is left to do: a
+    /// process still running <see cref="ExitGrace"/> later says so in the log and ends itself. The guard is a background thread: it
+    /// never keeps the process alive, and a normal exit (under 0.1 s) ends it first.
     /// </summary>
-    private static void GuardExit(int code)
+    internal static void GuardExit(int code, string after = "its exit")
     {
         var grace = ExitGrace;
         try
@@ -102,7 +103,7 @@ public partial class App : Application
             new System.Threading.Thread(() =>
             {
                 System.Threading.Thread.Sleep(grace);
-                Log("exit: the process was still running " + ((long)grace.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + " s after its exit; ended by force" + ExitMemory());
+                Log("exit: the process was still running " + ((long)grace.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + " s after " + after + "; ended by force" + ExitMemory());
                 // TerminateProcess: no shutdown code of any library runs again (that is what did not finish)
                 try { using var self = System.Diagnostics.Process.GetCurrentProcess(); self.Kill(); }
                 catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { Environment.Exit(code); }
