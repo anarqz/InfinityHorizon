@@ -57,13 +57,18 @@ public sealed class UiStallWatchdog : IDisposable
     /// <summary>Raised on the watchdog thread for each stall, once the UI thread answered again.</summary>
     public event Action<UiStall>? Stalled;
 
-    /// <summary>Every stall seen since the start (or the last <see cref="Reset"/>).</summary>
+    /// <summary>How many stalls <see cref="Stalls"/> keeps (the newest): a launcher left open for days must not keep every one.</summary>
+    public const int MaxStalls = 512;
+
+    private TimeSpan _longest;
+
+    /// <summary>The newest <see cref="MaxStalls"/> stalls seen since the start (or the last <see cref="Reset"/>), oldest first.</summary>
     public IReadOnlyList<UiStall> Stalls { get { lock (_gate) return [.. _stalls]; } }
 
     /// <summary>The longest stall seen since the start (or the last <see cref="Reset"/>); zero when none.</summary>
-    public TimeSpan Longest { get { lock (_gate) return _stalls.Count == 0 ? TimeSpan.Zero : _stalls.Max(s => s.Duration); } }
+    public TimeSpan Longest { get { lock (_gate) return _longest; } }
 
-    public void Reset() { lock (_gate) _stalls.Clear(); }
+    public void Reset() { lock (_gate) { _stalls.Clear(); _longest = TimeSpan.Zero; } }
 
     public void Start()
     {
@@ -107,7 +112,12 @@ public sealed class UiStallWatchdog : IDisposable
                 var cpuAfter = _cpu?.Invoke() ?? -1;
                 TimeSpan? cpu = cpuBefore >= 0 && cpuAfter >= cpuBefore ? TimeSpan.FromTicks(cpuAfter - cpuBefore) : null;
                 var stall = new UiStall(waited, DateTimeOffset.UtcNow, activity, cause, cpu);
-                lock (_gate) _stalls.Add(stall);
+                lock (_gate)
+                {
+                    if (_stalls.Count == MaxStalls) _stalls.RemoveAt(0);
+                    _stalls.Add(stall);
+                    if (stall.Duration > _longest) _longest = stall.Duration;
+                }
                 try { Stalled?.Invoke(stall); }
                 catch (Exception e) when (e is IOException or InvalidOperationException) { }
             }

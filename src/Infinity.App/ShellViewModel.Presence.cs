@@ -50,8 +50,31 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>The resolver seam: Infinity.Core.Process.CarNames (T10) over the remembered game folder's Mount; the key is Data_Car.Id × 1000.</summary>
-    private string? ResolveCarName(string azimuthRoot, int carKey, string locale) =>
-        azimuthRoot.Length == 0 || ContentLocation?.Mount is not { } mount ? null : new Infinity.Core.Process.CarNames(azimuthRoot, mount, locale).Name(carKey);
+    private string? ResolveCarName(string azimuthRoot, int carKey, string locale)
+    {
+        if (azimuthRoot.Length == 0 || ContentLocation?.Mount is not { } mount) return null;
+        // T-1118: one reader a session, not one a car: each holds an in-memory copy of the game database (and the mods' parsed files)
+        // that only a finalizer would free
+        var key = (azimuthRoot, mount, locale);
+        if (_carNameReader is not { } reader || _carNameReaderKey != key)
+        {
+            _carNameReader?.Clear();
+            _carNameReader = reader = new Infinity.Core.Process.CarNames(azimuthRoot, mount, locale);
+            _carNameReaderKey = key;
+        }
+        return reader.Name(carKey);
+    }
+
+    private Infinity.Core.Process.CarNames? _carNameReader;
+    private (string Root, string Mount, string Locale) _carNameReaderKey;
+
+    /// <summary>A session started or ended: the names and the reader's copy of the game database go (the install or its mods may change).</summary>
+    private void ForgetCarNames()
+    {
+        _carNames.Clear();
+        _carNameReader?.Clear();
+        _carNameReader = null;
+    }
     private (string Xuid, ProfilePresence Value)? _serverPresence;
     private CancellationTokenSource? _serverPresencePoll;
     private readonly PresenceReads _presenceReads = new(); // CR-L44: when to read, and the current car's livery image
@@ -192,7 +215,7 @@ public sealed partial class ShellViewModel
         {
             case SupervisorEvent.Spawned:
                 _gameStarted = DateTimeOffset.UtcNow;
-                _presenceProgress.Reset(); _hookCarName = null; _carNames.Clear();
+                _presenceProgress.Reset(); _hookCarName = null; ForgetCarNames();
                 _presenceReads.CarChanged(null);
                 StartServerPresence();
                 break;
@@ -209,7 +232,7 @@ public sealed partial class ShellViewModel
             case SupervisorEvent.Exited or SupervisorEvent.Ended:
                 if (_gameStarted is null && e is SupervisorEvent.Ended && _presence is null) break;
                 _gameStarted = null;
-                _presenceProgress.Reset(); _hookCarName = null; _carNames.Clear();
+                _presenceProgress.Reset(); _hookCarName = null; ForgetCarNames();
                 _presenceReads.CarChanged(null);
                 _presenceOverlay = false;
                 _serverPresencePoll?.Cancel();
