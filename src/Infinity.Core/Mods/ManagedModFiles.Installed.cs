@@ -82,7 +82,7 @@ public sealed partial class ManagedModFiles
         if (manifest.ConfigPath is { } config)
         {
             var path = Target("azimuth", config); var before = Current(path);
-            var ini = new ManifestIni(manifest, before is null ? ManifestIni.Defaults(manifest) : File.ReadAllBytes(path));
+            var ini = new ManifestIni(manifest, before is null ? ManifestIni.Defaults(manifest) : File.ReadAllBytes(path), ModFolderOption.ModFolder(manifest, _azimuth));
             ini.EnforceLocks(); var after = Store(ini.ToBytes());
             if (before is not null) Store(File.ReadAllBytes(path));
             if (before != after) changes.Add(new("azimuth", config, before, after));
@@ -205,7 +205,8 @@ public sealed partial class ManagedModFiles
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ModException) { }
     }
 
-    public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))));
+    public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))),
+        ModFolderOption.ModFolder(manifest, _azimuth));
 
     public void SaveSettings(ModManifest manifest, ManifestIni settings)
     {
@@ -219,7 +220,7 @@ public sealed partial class ManagedModFiles
         if (receipt.Enabled) CheckDependencies(manifest);
         settings.EnforceLocks();
         var bytes = settings.ToBytes();
-        var parsed = new ManifestIni(manifest, bytes);
+        var parsed = new ManifestIni(manifest, bytes, ModFolderOption.ModFolder(manifest, _azimuth));
         foreach (var dependent in InstalledManifests().Where(m => Receipt(m) is { Enabled: true }))
             foreach (var dependency in dependent.Document.GetProperty("dependencies").EnumerateArray().Where(d => d.GetProperty("id").GetString() == manifest.Id))
                 if (dependency.TryGetProperty("settings", out var required))

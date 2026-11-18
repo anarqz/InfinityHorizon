@@ -2391,8 +2391,31 @@
                                      Visibility="{Binding HasLockReason, Converter={StaticResource Visible}}" />
                           <CheckBox IsChecked="{Binding Checked}" Visibility="{Binding IsBoolean, Converter={StaticResource Visible}}" />
                           <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding IsNumber, Converter={StaticResource Visible}}" />
-                          <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Text}" Visibility="{Binding IsChoice, Converter={StaticResource Visible}}" />
+                          <ComboBox ItemsSource="{Binding Choices}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Text}"
+                                    Visibility="{Binding IsChoice, Converter={StaticResource Visible}}" />
+                          <!-- CR batch 1118 (EasyRadio): a folder option is a read-only path with Choose folder…, Clear and Open. -->
+                          <StackPanel Visibility="{Binding IsFolder, Converter={StaticResource Visible}}">
+                            <TextBox Text="{Binding FolderText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                                     AutomationProperties.Name="{Binding Label}" />
+                            <TextBlock Text="{Binding DataContext.S[mods.folder.missing], RelativeSource={RelativeSource AncestorType=Window}}"
+                                       TextWrapping="Wrap" Foreground="{StaticResource InfinityGold}" FontSize="11" Margin="0,4,0,0"
+                                       Visibility="{Binding FolderMissing, Converter={StaticResource Visible}}" />
+                            <WrapPanel Margin="0,6,0,0">
+                              <Button Content="{Binding DataContext.S[mods.folder.choose], RelativeSource={RelativeSource AncestorType=Window}}"
+                                      Click="OnChooseModFolder" Padding="10,6" Margin="0,0,8,0" />
+                              <Button Content="{Binding DataContext.S[mods.folder.clear], RelativeSource={RelativeSource AncestorType=Window}}"
+                                      Click="OnClearModFolder" IsEnabled="{Binding HasFolder}" Padding="10,6" Margin="0,0,8,0" />
+                              <Button Content="{Binding DataContext.S[mods.folder.open], RelativeSource={RelativeSource AncestorType=Window}}"
+                                      Click="OnOpenOptionFolder" Padding="10,6" Visibility="{Binding CanOpenFolder, Converter={StaticResource Visible}}" />
+                            </WrapPanel>
+                          </StackPanel>
                         </StackPanel>
+                      </DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <!-- config.openFolders: the mod's Azimuth folders (EasyRadio's music folder), created when missing, then opened -->
+                    <ItemsControl ItemsSource="{Binding ModOpenFolders}" Margin="0,4,0,0">
+                      <ItemsControl.ItemTemplate><DataTemplate>
+                        <Button Content="{Binding Label}" Click="OnOpenModSettingsFolder" Padding="10,6" Margin="0,0,0,8" HorizontalAlignment="Left" />
                       </DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>
                   </StackPanel>
