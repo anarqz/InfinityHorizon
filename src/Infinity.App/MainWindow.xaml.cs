@@ -77,6 +77,7 @@ public partial class MainWindow : Window
         // owner 2026-11-10: a stall of the window's thread is logged (launcher.log), and this PC's saves are looked at again off the UI
         // thread when the window comes back to the front (the game or the player may have changed them meanwhile)
         vm.StartUiWatchdog(Dispatcher);
+        vm.StartMemoryWatch();
         Activated += async (_, _) => await vm.RefreshLocalFactsQuietlyAsync();
         // One launcher per state folder (launcher.lock).
         _ = vm.AcquireInstanceLockAsync();

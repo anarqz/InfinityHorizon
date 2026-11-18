@@ -51,6 +51,21 @@ public sealed partial class ShellViewModel
     {
         _watchdog?.Dispose();
         _watchdog = null;
+        _memoryWatch?.Dispose();
+        _memoryWatch = null;
+    }
+
+    private Infinity.Core.Diagnostics.MemoryWatch? _memoryWatch;
+
+    /// <summary>
+    /// T-1118: the launcher's own memory in launcher.log (<see cref="Infinity.Core.Diagnostics.MemoryWatch"/>): a baseline, a line every
+    /// half hour and one at once when it moved 256 MB, from a timer of its own (never the window's thread). Started once, with the watchdog.
+    /// </summary>
+    internal void StartMemoryWatch()
+    {
+        if (_memoryWatch is not null) return;
+        _memoryWatch = new Infinity.Core.Diagnostics.MemoryWatch(Log);
+        _memoryWatch.Start();
     }
 
     /// <summary>A measured piece of UI-thread work (<c>using var _ = Span();</c>): named in a stall's cause when it was slow.</summary>
