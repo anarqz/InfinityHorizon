@@ -20,6 +20,8 @@ public sealed record ModCard(ModManifest Manifest, string Name, string Descripti
     public bool UpdateAvailable { get; init; }
     public string UpdateSummary { get; init; } = "";
     public ModManifest? Next { get; init; }
+    /// <summary>Batch 1118: the updates <see cref="Next"/> is made with, in order (dependency first); empty for an update alone.</summary>
+    public IReadOnlyList<ModManifest> Together { get; init; } = [];
     public bool CanUninstall => Installed && !Drift;
     /// <summary>Not installed, its files kept on this PC by the uninstall (installing again needs no download); Purge deletes them.</summary>
     public bool Held { get; init; }
@@ -40,6 +42,10 @@ internal sealed record ModCardFacts(ModManifest Manifest, ModInstallation? Insta
 {
     /// <summary>Not installed, with its files kept on this PC by its uninstall.</summary>
     public bool Held { get; init; }
+    /// <summary>Batch 1118: the updates <see cref="Next"/> needs made with it, dependency first (<see cref="ShellViewModel.UpdatePlan"/>); empty for one alone.</summary>
+    public IReadOnlyList<ModManifest> Together { get; init; } = [];
+    /// <summary>The refusal behind <see cref="Blocker"/>, which may name the mod it is about (<see cref="ModException.Related"/>).</summary>
+    public ModException? Refusal { get; init; }
 }
 
 public sealed partial class ShellViewModel
@@ -770,7 +776,7 @@ public sealed partial class ShellViewModel
         var health = manager.Inspect(progress, game);
         phase("installations read (" + health.Installed.Count + ")");
         var facts = new List<ModCardFacts>();
-        foreach (var listed in catalog) facts.Add(ListedFact(manager, listed, health.Installed.FirstOrDefault(i => i.Id == listed.Id)));
+        foreach (var listed in catalog) facts.Add(ListedFact(manager, listed, health.Installed.FirstOrDefault(i => i.Id == listed.Id), catalog, health));
         foreach (var installed in health.Installed.Where(i => i.Manifest is not null && catalog.All(m => m.Id != i.Id)))
             facts.Add(UnlistedFact(manager, installed));
         phase("cards (" + facts.Count + ")");
@@ -778,13 +784,23 @@ public sealed partial class ShellViewModel
     }
 
     /// <summary>What one catalog entry's card needs (the full read and the one-mod read after an operation decide it the same way).</summary>
-    private static ModCardFacts ListedFact(ManagedModFiles manager, ModManifest listed, ModInstallation? installed)
+    private static ModCardFacts ListedFact(ManagedModFiles manager, ModManifest listed, ModInstallation? installed, IReadOnlyList<ModManifest> catalog, ModHealth health)
     {
         // OD-116: a catalog entry rebuilds its manifest, so the reviewed manifest a 1.0.9 installed has other bytes for the same
         // content; the installed one stands for it (no update to review, receipts and settings stay bound to it).
         var manifest = installed?.Manifest is { } same && same.SameContent(listed) ? same : listed;
         if (installed?.Manifest is { } current && current.Digest != manifest.Digest)
-            return new(current, installed, false, Blocker(() => { if (installed.Enabled) { manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest); } }), manifest);
+        {
+            // batch 1118: an update that needs others' updates (a dependency's, an enabled dependent's) is judged with them
+            var plan = installed.Enabled ? UpdatePlan(manifest, catalog, health) : [manifest];
+            var blocker = Blocker(() =>
+            {
+                if (!installed.Enabled) return;
+                if (plan.Count > 1) { manager.CheckUpdatePlan(plan); return; }
+                manager.CheckDependencies(manifest); manager.CheckDependents(manifest.Id, manifest);
+            }, out var refusal);
+            return new(current, installed, false, blocker, manifest) { Together = plan.Count > 1 ? plan : [], Refusal = refusal };
+        }
         var adopt = false; var held = false;
         if (installed is null) try { adopt = manager.CanAdopt(manifest); held = manager.Held(manifest.Id) is not null; } catch (Exception error) when (ManagedModFiles.IsStateError(error)) { }
         return new(manifest, installed, adopt, installed?.Problem ?? Blocker(() =>
@@ -816,10 +832,13 @@ public sealed partial class ShellViewModel
         .Where(d => d.Id != ManagedModFiles.BuiltInExtraOptions && !_modHealth.Installed.Any(i => i.Id == d.Id && i.Enabled))
         .Select(d => _manifestCatalog.FirstOrDefault(m => m.Id == d.Id)?.Text("name", S.Locale) ?? d.Id).ToList();
 
-    private static string? Blocker(Action check)
+    private static string? Blocker(Action check) => Blocker(check, out _);
+
+    private static string? Blocker(Action check, out ModException? refusal)
     {
+        refusal = null;
         try { check(); return null; }
-        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return ManagedModFiles.Code(error); }
+        catch (Exception error) when (ManagedModFiles.IsStateError(error)) { refusal = error as ModException; return ManagedModFiles.Code(error); }
     }
 
     private void RefreshModCards()
@@ -857,7 +876,8 @@ public sealed partial class ShellViewModel
             }
             else if (fact.Next is { } next)
             {
-                status = S.Format("mods.update_available", ("from", mod.Version), ("to", next.Version));
+                status = fact.Blocker is null ? S.Format("mods.update_available", ("from", mod.Version), ("to", next.Version))
+                    : S.Format("mods.update_blocked", ("to", next.Version), ("reason", UpdateBlockerText(fact))); // batch 1118: never silent
                 badge = S["mods.update"]; action = S["mods.review_update"];
                 canAct = !expired && next.SupportedForInstall && fact.Blocker is null && installed!.Drift.Count == 0;
             }
@@ -928,7 +948,8 @@ public sealed partial class ShellViewModel
                 Held = installed is null && fact.Held,
                 Drift = installed?.Drift.Count > 0, SettingsIssues = installed?.SettingsIssues.Count > 0,
                 UpdateAvailable = fact.Next is not null && !mod.Retired, Next = mod.Retired ? null : fact.Next,
-                UpdateSummary = fact.Next is { } upcoming && !mod.Retired ? UpdateSummary(mod, upcoming) : "",
+                UpdateSummary = fact.Next is { } upcoming && !mod.Retired ? UpdateSummary(mod, upcoming) + TogetherText(fact) : "",
+                Together = mod.Retired ? [] : fact.Together,
                 // OD-116: every mod of a player-chosen catalog says so.
                 SourceBadge = UsingCustomCatalog && _manifestCatalog.Any(m => m.Id == mod.Id) || installed is not null && UnofficialSource(mod.Id) is not null
                     ? S["catalog.badge"] : "",
@@ -961,6 +982,8 @@ public sealed partial class ShellViewModel
     private string ModErrorText(Exception error) => error switch
     {
         ModSettingsChangedException => S["mods.settings_changed"],
+        ModUpdatePlanException failed => UpdatePlanFailureText(failed),
+        ModException refused when RefusalText(refused) is { } named => named, // batch 1118: the mod it is about, never a generic failure
         HttpRequestException or OperationCanceledException => S["mods.download_failed"],
         ModException mod => ModErrorText(mod.Code),
         _ => S["mods.transaction_failed"],
@@ -1021,6 +1044,7 @@ public sealed partial class ShellViewModel
         if (ModCards.FirstOrDefault(c => c.Manifest.Id == card.Manifest.Id) is { } latest) card = latest;
         if (card is not { UpdateAvailable: true, CanAct: true, Next: { } next }) return Task.CompletedTask;
         if (next.IsExternal) return OpenExternalSetupAsync(card, update: true); // after its review; only files whose pins changed are asked for again
+        if (card.Together.Count > 1) return UpdateModsTogetherAsync(card); // batch 1118: dependency first, from this one confirmation
         var factory = ModManagerFactory()!; var hosts = CatalogHosts; var hardcore = ProfileHardcore;
         return RunModOperationAsync(async () =>
         {

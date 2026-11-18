@@ -103,9 +103,13 @@ public sealed partial class ManagedModFiles
             foreach (var package in packages.EnumerateObject()) yield return (package.Name, package.Value);
     }
 
-    public void CheckDependencies(ModManifest manifest) => CheckDependencies(manifest, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    public void CheckDependencies(ModManifest manifest) => CheckDependencies(manifest, new HashSet<string>(StringComparer.OrdinalIgnoreCase), null);
 
-    private void CheckDependencies(ModManifest manifest, HashSet<string> visiting)
+    /// <param name="planned">
+    /// An update made together with others (<see cref="UpdateTogetherAsync"/>): a dependency the plan updates is judged by its planned
+    /// manifest (its version, and its installation enabled); its files and settings are checked when its own step runs.
+    /// </param>
+    private void CheckDependencies(ModManifest manifest, HashSet<string> visiting, IReadOnlyDictionary<string, ModManifest>? planned)
     {
         if (!visiting.Add(manifest.Id)) throw new ModException("cyclic mod dependencies", ModErrors.Dependency);
         var installed = InstalledManifests();
@@ -114,17 +118,25 @@ public sealed partial class ManagedModFiles
             var id = dependency.GetProperty("id").GetString();
             // OD-125/127: ExtraOptions comes with Infinity (ExtraOptions.Infinity), always on; never a managed mod to check
             if (id == BuiltInExtraOptions) continue;
-            var target = installed.SingleOrDefault(m => m.Id == id) ?? throw new ModException("required dependency is not managed", ModErrors.Dependency);
+            var versions = dependency.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray();
+            ModException Refused(string message) => new(message, ModErrors.Dependency) { Related = id, RelatedVersions = versions };
+            if (id is not null && planned is not null && planned.TryGetValue(id, out var next))
+            {
+                if (!versions.Contains(next.Version) || ReceiptFor(id) is not { Enabled: true }) throw Refused("required dependency is disabled or incompatible");
+                CheckDependencies(next, visiting, planned);
+                continue;
+            }
+            var target = installed.SingleOrDefault(m => m.Id == id) ?? throw Refused("required dependency is not managed");
             // OD-232: an installation in a retired format satisfies nothing; it is only there to be removed
-            if (target.Retired || !dependency.GetProperty("versions").EnumerateArray().Any(v => v.GetString() == target.Version)
-                || Receipt(target) is not { Enabled: true } || !VerifiedOnce(target)) throw new ModException("required dependency is disabled or incompatible", ModErrors.Dependency);
-            CheckDependencies(target, visiting);
+            if (target.Retired || !versions.Contains(target.Version)
+                || Receipt(target) is not { Enabled: true } || !VerifiedOnce(target)) throw Refused("required dependency is disabled or incompatible");
+            CheckDependencies(target, visiting, planned);
             if (dependency.TryGetProperty("settings", out var settings) && settings.GetArrayLength() > 0)
             {
                 var values = ReadSettings(target).Values;
                 foreach (var setting in settings.EnumerateArray())
                     if (!values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
-                        || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw new ModException("required dependency settings differ", ModErrors.Dependency);
+                        || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw Refused("required dependency settings differ");
             }
         }
         if (manifest.Document.TryGetProperty("conflicts", out var conflicts))
@@ -141,13 +153,23 @@ public sealed partial class ManagedModFiles
         visiting.Remove(manifest.Id);
     }
 
-    /// <summary>Enabled mods depending on <paramref name="id"/> block its removal; with <paramref name="replacement"/>, only those that do not accept that version.</summary>
-    public void CheckDependents(string id, ModManifest? replacement = null)
+    /// <summary>
+    /// Enabled mods depending on <paramref name="id"/> block its removal; with <paramref name="replacement"/> (an update), only those that do
+    /// not accept that version. The refusal names the dependent (<see cref="ModException.Related"/>) and the versions it accepts.
+    /// </summary>
+    /// <param name="planned">
+    /// The updates made together with this one (<see cref="UpdateTogetherAsync"/>): a dependent the plan updates is judged by its planned
+    /// manifest, which may accept the new version (or no longer need this mod).
+    /// </param>
+    public void CheckDependents(string id, ModManifest? replacement = null, IReadOnlyDictionary<string, ModManifest>? planned = null)
     {
         foreach (var manifest in InstalledManifests())
-            if (Receipt(manifest) is { Enabled: true } && manifest.Dependencies.FirstOrDefault(d => d.Id == id) is { } dependency
-                && (replacement is null || !dependency.Versions.Contains(replacement.Version)))
-                throw new ModException("disable dependent mods first", ModErrors.Dependency);
+        {
+            if (Receipt(manifest) is not { Enabled: true }) continue;
+            var judged = planned is not null && replacement is not null && planned.TryGetValue(manifest.Id, out var next) ? next : manifest;
+            if (judged.Dependencies.FirstOrDefault(d => d.Id == id) is { } dependency && (replacement is null || !dependency.Versions.Contains(replacement.Version)))
+                throw new ModException("disable dependent mods first", ModErrors.Dependency) { Related = manifest.Id, RelatedVersions = dependency.Versions, RelatedIsDependent = true };
+        }
     }
 
     /// <summary>

@@ -211,6 +211,15 @@ public sealed partial class ManagedModFiles
                 cancellation).ConfigureAwait(false);
             return;
         }
+        var packages = await DownloadPackagesAsync(http, manifest, downloadHosts, cancellation, progress).ConfigureAwait(false);
+        progress?.Report("verify");
+        await Task.Run(() => InstallVerifiedPackages(manifest, packages, progress, update, hardcore), cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary>Every package of <paramref name="manifest"/>, from the package cache or downloaded, each checked against its pinned size and SHA-256.</summary>
+    private async Task<Dictionary<string, byte[]>> DownloadPackagesAsync(HttpClient http, ModManifest manifest, Func<string, bool> downloadHosts,
+        CancellationToken cancellation, IProgress<string>? progress)
+    {
         var packages = new Dictionary<string, byte[]>();
         foreach (var (name, spec) in PackageSpecs(manifest))
         {
@@ -234,8 +243,155 @@ public sealed partial class ManagedModFiles
             if (bytes.LongLength != size || ModManifest.Hash(bytes) != hash) throw new ModException("package digest mismatch", ModErrors.Digest);
             packages.Add(name, bytes);
         }
+        return packages;
+    }
+
+    /// <summary>
+    /// The order an update made together with others runs in: each mod after the plan's mods it depends on (dependency first, the
+    /// catalog's order otherwise). A cycle inside the plan is refused.
+    /// </summary>
+    public static IReadOnlyList<ModManifest> UpdateOrder(IReadOnlyCollection<ModManifest> plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var byId = plan.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<ModManifest>(); var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Place(ModManifest mod)
+        {
+            if (placed.Contains(mod.Id)) return;
+            if (!visiting.Add(mod.Id)) throw new ModException("cyclic mod dependencies", ModErrors.Dependency);
+            foreach (var dependency in mod.Dependencies) if (byId.TryGetValue(dependency.Id, out var first)) Place(first);
+            visiting.Remove(mod.Id); placed.Add(mod.Id); ordered.Add(mod);
+        }
+        foreach (var mod in plan) Place(mod);
+        return ordered;
+    }
+
+    /// <summary>
+    /// The updates <paramref name="next"/> needs made with it (nothing is read from disk): a dependency it needs at a version the catalog
+    /// offers as that mod's update, and an enabled dependent that does not accept the new version but whose offered update does; followed
+    /// through, in dependency order (<see cref="UpdateOrder"/>). Just <paramref name="next"/> when nothing else is needed (or nothing else
+    /// can help: its own checks then say why).
+    /// </summary>
+    /// <param name="installed">The installations as the Mods page read them (<see cref="ModHealth.Installed"/>).</param>
+    public static IReadOnlyList<ModManifest> UpdatePlan(ModManifest next, IReadOnlyList<ModManifest> catalog, IReadOnlyList<ModInstallation> installed)
+    {
+        ArgumentNullException.ThrowIfNull(next); ArgumentNullException.ThrowIfNull(catalog); ArgumentNullException.ThrowIfNull(installed);
+        ModManifest? Have(string id) => installed.FirstOrDefault(i => i.Id == id && i.Problem is null)?.Manifest;
+        // the catalog's other version of an installed mod (as the Mods page decides an update), one it can install
+        ModManifest? Offered(string id) => Have(id) is { Retired: false } current && catalog.FirstOrDefault(m => m.Id == id) is { } listed
+            && current.Digest != listed.Digest && !current.SameContent(listed) && listed.SupportedForInstall && !listed.IsExternal ? listed : null;
+        var plan = new Dictionary<string, ModManifest>(StringComparer.OrdinalIgnoreCase) { [next.Id] = next };
+        var queue = new Queue<ModManifest>([next]);
+        while (queue.TryDequeue(out var mod))
+        {
+            foreach (var need in mod.Dependencies)
+            {
+                if (need.Id == BuiltInExtraOptions || plan.ContainsKey(need.Id)) continue;
+                if (Have(need.Id) is { } have && !need.Versions.Contains(have.Version) && Offered(need.Id) is { } up && need.Versions.Contains(up.Version))
+                { plan[up.Id] = up; queue.Enqueue(up); }
+            }
+            foreach (var installation in installed)
+            {
+                if (!installation.Enabled || installation.Problem is not null || installation.Manifest is not { } dependent || plan.ContainsKey(dependent.Id)) continue;
+                if (dependent.Dependencies.FirstOrDefault(d => d.Id == mod.Id) is not { } need || need.Versions.Contains(mod.Version)) continue;
+                if (Offered(dependent.Id) is { } up && up.Dependencies.FirstOrDefault(d => d.Id == mod.Id) is var upNeed && (upNeed is null || upNeed.Versions.Contains(mod.Version)))
+                { plan[up.Id] = up; queue.Enqueue(up); }
+            }
+        }
+        if (plan.Count == 1) return [next];
+        try { return UpdateOrder(plan.Values); }
+        catch (ModException) { return [next]; } // a cycle: the update alone, whose checks say why it waits
+    }
+
+    /// <summary>
+    /// Whether the updates of <paramref name="plan"/>, made together, leave every enabled mod's dependencies met (nothing is written): each
+    /// update's own checks with the plan's other mods at their new versions. Throws the first refusal, which names the mod it is about.
+    /// </summary>
+    public void CheckUpdatePlan(IReadOnlyCollection<ModManifest> plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var planned = plan.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        foreach (var next in UpdateOrder(plan))
+        {
+            var installed = ReadReceipt(next.Id) ?? throw new ModException("mod is not installed") { Related = next.Id };
+            if (installed.ManifestHash == next.Digest) throw new ModException("this version is already installed") { Related = next.Id };
+            if (SnapshotFor(installed).Retired) throw new ModException("remove the retired installation first", ModErrors.Retired) { Related = next.Id };
+            if (DriftOf(installed, cached: ForDisplay) is { Count: > 0 }) throw new ModException("files changed outside the launcher", ModErrors.Drift) { Related = next.Id };
+            if (!next.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported) { Related = next.Id };
+            if (!installed.Enabled) continue; // a disabled mod stays disabled across its update: nothing it needs is checked now
+            CheckDependencies(next, new HashSet<string>(StringComparer.OrdinalIgnoreCase), planned);
+            CheckDependents(next.Id, next, planned);
+        }
+    }
+
+    /// <summary>
+    /// An update that needs others (Underglow 1.1.1 needs FH2 ANNA 1.2.4, which Underglow 1.1.0 does not accept): every package is
+    /// downloaded and verified first, the plan is checked as a whole (<see cref="CheckUpdatePlan"/>), then each mod is updated in
+    /// dependency order (<see cref="UpdateOrder"/>). A step that fails stops the plan: the mods after it are not touched, and an enabled mod
+    /// that no longer accepts what an earlier step installed is turned off (<see cref="ModUpdatePlanException"/> names them).
+    /// </summary>
+    public async Task UpdateTogetherAsync(HttpClient http, IReadOnlyCollection<ModManifest> plan, Func<string, bool> downloadHosts, CancellationToken cancellation,
+        IProgress<string>? progress = null, bool hardcore = false)
+    {
+        ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(downloadHosts);
+        var ordered = UpdateOrder(plan);
+        var packages = new Dictionary<string, Dictionary<string, byte[]>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var next in ordered)
+        {
+            if (!next.SupportedForInstall) throw new ModException("this manifest uses unsupported installation capabilities", ModErrors.Unsupported) { Related = next.Id };
+            packages[next.Id] = await DownloadPackagesAsync(http, next, downloadHosts, cancellation, progress).ConfigureAwait(false);
+        }
         progress?.Report("verify");
-        await Task.Run(() => InstallVerifiedPackages(manifest, packages, progress, update, hardcore), cancellation).ConfigureAwait(false);
+        await Task.Run(() => UpdateVerifiedTogether(ordered, packages, progress, hardcore), cancellation).ConfigureAwait(false);
+    }
+
+    /// <summary><see cref="UpdateTogetherAsync"/> after its downloads (the tests' entry: packages by mod id, then package name).</summary>
+    internal void UpdateVerifiedTogether(IReadOnlyList<ModManifest> plan, IReadOnlyDictionary<string, Dictionary<string, byte[]>> packages,
+        IProgress<string>? progress = null, bool hardcore = false)
+    {
+        var ordered = UpdateOrder(plan);
+        // every package is checked before anything changes (a package that does not match its pins stops the plan here)
+        foreach (var next in ordered) _ = VerifyPackages(next, packages.TryGetValue(next.Id, out var own) ? own : []);
+        CheckUpdatePlan(ordered);
+        var planned = ordered.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
+        for (var step = 0; step < ordered.Count; step++)
+        {
+            var next = ordered[step];
+            try { InstallFrom(next, () => VerifyPackages(next, packages[next.Id]), progress, update: true, hardcore, planned); }
+            catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException)
+            {
+                var notChanged = ordered.Skip(step + 1).Select(m => m.Id).ToArray();
+                throw new ModUpdatePlanException(next.Id, notChanged, step == 0 ? [] : TurnOffUnmet(), error);
+            }
+        }
+    }
+
+    /// <summary>
+    /// After a step of a plan failed: enabled mods whose dependencies an earlier step changed and no longer meets are turned off (a mod is
+    /// never left on beside a dependency version it does not accept). What cannot be turned off stays, and is not named.
+    /// </summary>
+    private string[] TurnOffUnmet()
+    {
+        var turnedOff = new List<string>();
+        for (var changed = true; changed;)
+        {
+            changed = false;
+            foreach (var manifest in InstalledManifests())
+            {
+                try
+                {
+                    if (Receipt(manifest) is not { Enabled: true }) continue;
+                    try { CheckDependencies(manifest); continue; }
+                    catch (ModException refused) when (refused.Code == ModErrors.Dependency) { }
+                    using (Lock()) if (!SetEnabledLocked(manifest, false, null, hardcore: false)) continue;
+                    turnedOff.Add(manifest.Id); changed = true;
+                }
+                catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { }
+            }
+        }
+        if (turnedOff.Count > 0) { try { using (Lock()) ReconcileWineOverrides(); } catch (Exception error) when (IsStateError(error) && error is not SimulatedCrashException) { } }
+        return [.. turnedOff];
     }
 
     public void InstallVerifiedPackage(ModManifest manifest, byte[] package, IProgress<string>? progress = null, bool update = false, bool hardcore = false)
@@ -293,7 +449,9 @@ public sealed partial class ManagedModFiles
         ExtraOptionsMods.CheckPackage(manifest, destination => verified.FirstOrDefault(v => v.Key.Root == "azimuth"
             && v.Key.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase)).Value?.Invoke());
 
-    private void InstallFrom(ModManifest manifest, Func<Dictionary<ManifestFile, Func<byte[]>>> verify, IProgress<string>? progress, bool update, bool hardcore)
+    /// <param name="planned">An update step of <see cref="UpdateTogetherAsync"/>: the plan's mods at their new versions (dependents judged by them).</param>
+    private void InstallFrom(ModManifest manifest, Func<Dictionary<ManifestFile, Func<byte[]>>> verify, IProgress<string>? progress, bool update, bool hardcore,
+        IReadOnlyDictionary<string, ModManifest>? planned = null)
     {
         RejectBuiltInFiles(manifest);
         if (!manifest.SupportedForInstall)
@@ -311,7 +469,7 @@ public sealed partial class ManagedModFiles
             if (installed.Enabled) CheckProfile(manifest, hardcore); // an enabled mod stays enabled across its update
             var next = verify();
             CheckExtraOptionsPackage(manifest, next);
-            Update(manifest, installed, next, progress); return;
+            Update(manifest, installed, next, progress, planned); return;
         }
         CheckProfile(manifest, hardcore);
         CheckDependencies(manifest);
@@ -365,9 +523,10 @@ public sealed partial class ManagedModFiles
     /// stay the originals, removed mappings are restored, new ones are backed up first, and the
     /// player's settings and seeded files are kept (new locks applied). A disabled mod stays disabled.
     /// </summary>
-    private void Update(ModManifest manifest, ManagedModReceipt installed, Dictionary<ManifestFile, Func<byte[]>> verified, IProgress<string>? progress)
+    private void Update(ModManifest manifest, ManagedModReceipt installed, Dictionary<ManifestFile, Func<byte[]>> verified, IProgress<string>? progress,
+        IReadOnlyDictionary<string, ModManifest>? planned = null)
     {
-        if (installed.Enabled) { CheckDependencies(manifest); CheckDependents(manifest.Id, manifest); }
+        if (installed.Enabled) { CheckDependencies(manifest); CheckDependents(manifest.Id, manifest, planned); }
         if (DriftOf(installed) is { Count: > 0 }) throw new ModException("files changed outside the launcher", ModErrors.Drift);
         var old = installed.Files.ToDictionary(f => f.Root + "/" + f.Path, StringComparer.OrdinalIgnoreCase);
         var owned = new List<ManagedModFile>(); var changes = new List<ModFileChange>();

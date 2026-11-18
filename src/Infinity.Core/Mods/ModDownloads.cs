@@ -9,6 +9,25 @@ namespace Infinity.Core.Mods;
 public class ModException(string message, string code = ModErrors.Failed, Exception? inner = null) : Exception(message, inner)
 {
     public string Code { get; } = code;
+    /// <summary>A <see cref="ModErrors.Dependency"/> refusal: the other mod it is about (a dependency, or with <see cref="RelatedIsDependent"/> an enabled dependent).</summary>
+    public string? Related { get; init; }
+    /// <summary>The versions of the dependency the relation accepts (the manifest's exact list).</summary>
+    public IReadOnlyList<string> RelatedVersions { get; init; } = [];
+    /// <summary>True when <see cref="Related"/> is an enabled mod that depends on the one changed (and does not accept its new version).</summary>
+    public bool RelatedIsDependent { get; init; }
+}
+
+/// <summary>
+/// One step of an update made together with its dependencies' or dependents' updates (<see cref="ManagedModFiles.UpdateTogetherAsync"/>)
+/// failed: <see cref="Mod"/> was not updated, the steps after it (<see cref="NotChanged"/>) were not touched, and the mods
+/// <see cref="TurnedOff"/> were disabled because what they need had already been updated.
+/// </summary>
+public sealed class ModUpdatePlanException(string mod, IReadOnlyList<string> notChanged, IReadOnlyList<string> turnedOff, Exception inner)
+    : ModException("update of " + mod + " failed: " + inner.Message, (inner as ModException)?.Code ?? ModErrors.Failed, inner)
+{
+    public string Mod { get; } = mod;
+    public IReadOnlyList<string> NotChanged { get; } = notChanged;
+    public IReadOnlyList<string> TurnedOff { get; } = turnedOff;
 }
 
 /// <summary>The stable categories of <see cref="ModException.Code"/>.</summary>

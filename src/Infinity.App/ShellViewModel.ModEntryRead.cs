@@ -76,7 +76,7 @@ public sealed partial class ShellViewModel
                 foreach (var id in decide)
                 {
                     var installed = health.Installed.FirstOrDefault(i => i.Id == id);
-                    decided[id] = catalog.FirstOrDefault(m => m.Id == id) is { } listed ? ListedFact(manager, listed, installed)
+                    decided[id] = catalog.FirstOrDefault(m => m.Id == id) is { } listed ? ListedFact(manager, listed, installed, catalog, health)
                         : installed?.Manifest is not null ? UnlistedFact(manager, installed) : null;
                 }
                 // in the full read's order: the catalog's, then the installed ones it no longer lists
