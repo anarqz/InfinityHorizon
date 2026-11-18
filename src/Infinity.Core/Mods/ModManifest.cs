@@ -171,6 +171,9 @@ public sealed class ModManifest
                         if (choices.Length is < 1 or > 64 || choices.Distinct(StringComparer.Ordinal).Count() != choices.Length
                             || choices.Any(v => v.Length is < 1 or > 64 || v.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-'))))
                             throw new ModException("invalid enum token");
+                        // a choice's label, when present, is localized text with English (the form shows it in the ComboBox)
+                        foreach (var choice in option.GetProperty("choices").EnumerateArray())
+                            if (choice.TryGetProperty("label", out var choiceLabel)) ValidateLocalized(choiceLabel);
                     }
                     if (option.GetProperty("type").GetString() == ModFolderOption.Type) ValidateFolderOption(option);
                     ModMultiplayer.ValidateValue(option, option.GetProperty("default"));
@@ -392,17 +395,18 @@ public sealed class ModManifest
         var empty = option.TryGetProperty("emptyValue", out var emptyValue) && emptyValue.ValueKind == JsonValueKind.String ? emptyValue.GetString() : null;
         if (!Token(empty) || !option.TryGetProperty("emptyLabel", out var emptyLabel)) throw new ModException("invalid folder option");
         ValidateLocalized(emptyLabel);
-        var tokens = new HashSet<string>(StringComparer.Ordinal);
+        // the plugin compares the empty value and the tokens in any case: so do these checks
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (option.TryGetProperty("tokens", out var list))
         {
             foreach (var token in list.EnumerateArray())
-                if (token.ValueKind != JsonValueKind.String || !Token(token.GetString()) || token.GetString() == empty || !tokens.Add(token.GetString()!))
+                if (token.ValueKind != JsonValueKind.String || !Token(token.GetString()) || string.Equals(token.GetString(), empty, StringComparison.OrdinalIgnoreCase) || !tokens.Add(token.GetString()!))
                     throw new ModException("invalid folder option");
             if (tokens.Count is 0 or > 64) throw new ModException("invalid folder option");
             AzimuthFolder(option.TryGetProperty("tokenFolder", out var tokenFolder) ? tokenFolder : throw new ModException("invalid folder option"));
         }
         else if (option.TryGetProperty("tokenFolder", out _)) throw new ModException("invalid folder option");
-        if (option.GetProperty("default") is not { ValueKind: JsonValueKind.String } value || value.GetString() != empty && !tokens.Contains(value.GetString()!)
+        if (option.GetProperty("default") is not { ValueKind: JsonValueKind.String } value || !string.Equals(value.GetString(), empty, StringComparison.OrdinalIgnoreCase) && !tokens.Contains(value.GetString()!)
             || option.TryGetProperty("lockedValue", out _))
             throw new ModException("invalid folder option");
     }
