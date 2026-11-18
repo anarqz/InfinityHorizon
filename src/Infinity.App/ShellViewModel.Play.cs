@@ -481,9 +481,35 @@ public sealed partial class ShellViewModel
         }
     }
 
+    private bool? _leaseSuspendCapture;
+
+    /// <summary>
+    /// T-1118: the hook's capability lease is Capture{5} and Capture{6} once a second for the game's whole life (launch.c
+    /// launch_session). Neither is a log line each: the receiver's changes are logged by <see cref="IntegrityOn"/>, and Capture{6} is
+    /// logged once a session and when its value changes. (3.2.0 wrote 4 662 such lines in 80 minutes, each one a file append on the
+    /// window's thread, and would have filled the 8 MiB log in a day of play.)
+    /// </summary>
+    private bool LeaseTick(SupervisorEvent e)
+    {
+        switch (e)
+        {
+            case SupervisorEvent.Handshake or SupervisorEvent.Exited or SupervisorEvent.Ended:
+                _leaseSuspendCapture = null;
+                return false;
+            case SupervisorEvent.Capture { What: CaptureWhat.RemotePaintReceiver }:
+                return true;
+            case SupervisorEvent.Capture { What: CaptureWhat.OnlineSuspend } capture:
+                if (_leaseSuspendCapture == capture.Ok) return true;
+                _leaseSuspendCapture = capture.Ok;
+                return false;
+            default:
+                return false;
+        }
+    }
+
     private void Render(SupervisorEvent e)
     {
-        if (e is not SupervisorEvent.Capture { What: CaptureWhat.RemotePaintReceiver }) Log(e is SupervisorEvent.Admitted a ? $"Admitted pool={a.Pool.Name} tier={a.Pool.Tier}"
+        if (!LeaseTick(e)) Log(e is SupervisorEvent.Admitted a ? $"Admitted pool={a.Pool.Name} tier={a.Pool.Tier}"
             : e is SupervisorEvent.Queued qlog ? $"Queued position={qlog.Place.Position} ahead={qlog.Place.Ahead}"
             : e is SupervisorEvent.AdmissionRetry retryLog ? $"Admission retry {retryLog.Code} after={retryLog.Delay.TotalSeconds:F0}s" : e.ToString());
         IntegrityOn(e);
