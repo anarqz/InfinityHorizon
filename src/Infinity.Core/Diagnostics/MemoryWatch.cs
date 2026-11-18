@@ -33,7 +33,7 @@ public readonly record struct MemorySample(long PrivateBytes, long WorkingSet, l
 
 /// <summary>
 /// T-1118: on 2026-11-18 a launcher left open since the day before held about 20 GB and launcher.log said nothing about it. The launcher
-/// now writes its own memory to the log: one line a minute after the start (the baseline), one every <see cref="ReportEvery"/>, and one
+/// now writes its own memory to the log: one line at the start (the baseline), one every <see cref="ReportEvery"/>, and one
 /// at once whenever the private bytes moved <see cref="GrowthStep"/> or more since the last line (read every <see cref="CheckEvery"/>).
 /// Each line splits the managed heap from the rest and carries the handle, thread and window-object counts, so a growth is dated and
 /// narrowed down by the log alone. At most a few lines an hour; never anything but numbers.
@@ -61,10 +61,10 @@ public sealed class MemoryWatch : IDisposable
         _clock = clock ?? TimeProvider.System;
     }
 
-    /// <summary>Starts the checks (once): the first after <see cref="CheckEvery"/>, then every <see cref="CheckEvery"/>.</summary>
+    /// <summary>Starts the checks (once): the first at once (the baseline, on the timer's thread), then every <see cref="CheckEvery"/>.</summary>
     public void Start()
     {
-        lock (_gate) _timer ??= _clock.CreateTimer(_ => Check(), null, CheckEvery, CheckEvery);
+        lock (_gate) _timer ??= _clock.CreateTimer(_ => Check(), null, TimeSpan.Zero, CheckEvery);
     }
 
     /// <summary>One check now: reads the process and logs the line when one is due.</summary>
