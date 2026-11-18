@@ -12,7 +12,25 @@ namespace Infinity.App;
 public sealed partial class ShellViewModel
 {
     private string? _installPreviewDigest, _installConfirmedDigest;
-    private (string Key, IReadOnlyList<string> Files)? _previewReplaced;
+
+    /// <summary>How many previews are kept (the page shows two at most: the pane's and the confirmation's).</summary>
+    private const int MaxPreviews = 16;
+
+    // T-1118: one entry per mod and folder. 3.1.1 to 3.2.0 kept a single preview, and the page can show two at once (the information
+    // pane's mod and the confirmation's): each read ended with a notify-all, the other preview was then missing and read again, without
+    // end (hundreds of notify-alls a second, a mod manager built for each, the window's thread never free again, memory by the gigabyte).
+    private readonly Dictionary<string, IReadOnlyList<string>> _previewReplaced = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task<IReadOnlyList<string>>> _previewReading = new(StringComparer.Ordinal);
+    private int _previewGeneration;
+
+    private string PreviewKey(ModManifest mod) => mod.Digest + "|" + _install?.Root;
+
+    /// <summary>What is there now, never an earlier preview's: every preview is read again when next shown (a read in flight is dropped).</summary>
+    internal void ForgetPreviews()
+    {
+        _previewReplaced.Clear();
+        _previewGeneration++;
+    }
 
     /// <summary>A card's Install that writes files (not an adoption, not a player's-files mod: those have their own pane).</summary>
     private bool NeedsInstallPreview(ModCard card) => !card.Installed && !card.Manifest.IsExternal && card.Action != S["mods.adopt"]
@@ -35,36 +53,46 @@ public sealed partial class ShellViewModel
     // owner 2026-11-10 ("the launcher never looks frozen"): read off the UI thread; the pane shows it when it is known
     private IReadOnlyList<string> ReplacedBy(ModManifest mod)
     {
-        var key = mod.Digest + "|" + _install?.Root;
-        if (_previewReplaced?.Key == key) return _previewReplaced.Value.Files;
+        if (_previewReplaced.TryGetValue(PreviewKey(mod), out var files)) return files;
         _ = ReplacedByAsync(mod);
         return [];
     }
 
     /// <summary>The preview of <paramref name="mod"/> is read (the pane's Install and the card's confirmation wait for it).</summary>
-    private bool PreviewKnown(ModManifest mod) => _previewReplaced?.Key == mod.Digest + "|" + _install?.Root;
+    private bool PreviewKnown(ModManifest mod) => _previewReplaced.ContainsKey(PreviewKey(mod));
 
-    private (string Key, Task<IReadOnlyList<string>> Read)? _previewReading;
-
-    /// <summary>The existing files <paramref name="mod"/> would replace, read on a worker (one read per mod and folder at a time).</summary>
-    internal async Task<IReadOnlyList<string>> ReplacedByAsync(ModManifest mod)
+    /// <summary>
+    /// The existing files <paramref name="mod"/> would replace, read on a worker. One read per mod and folder at a time, shared by
+    /// every caller (the bindings that ask during one notify-all, a card's button), and one notify-all when it is known.
+    /// </summary>
+    internal Task<IReadOnlyList<string>> ReplacedByAsync(ModManifest mod)
     {
         ArgumentNullException.ThrowIfNull(mod);
-        if (ModManagerFactory() is not { } factory) return [];
-        var key = mod.Digest + "|" + _install?.Root;
-        if (_previewReplaced?.Key == key) return _previewReplaced.Value.Files;
-        if (_previewReading is not { } reading || reading.Key != key)
+        if (ModManagerFactory() is not { } factory) return Task.FromResult<IReadOnlyList<string>>([]);
+        var key = PreviewKey(mod);
+        if (_previewReplaced.TryGetValue(key, out var known)) return Task.FromResult(known);
+        // a read started before the previews were forgotten is not this one: its slot carries the generation
+        var generation = _previewGeneration;
+        var slot = generation.ToString(CultureInfo.InvariantCulture) + ":" + key;
+        if (_previewReading.TryGetValue(slot, out var reading)) return reading;
+        return _previewReading[slot] = ReadPreviewAsync(key, slot, generation, () =>
         {
-            reading = (key, Task.Run<IReadOnlyList<string>>(() =>
-            {
-                try { return factory().ExistingFilesReplaced(mod); }
-                catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return []; }
-            }));
-            _previewReading = reading;
-        }
-        var files = await reading.Read;
-        if (_previewReading?.Key == key) _previewReading = null;
-        if (key == mod.Digest + "|" + _install?.Root) { _previewReplaced = (key, files); Changed(string.Empty); }
+            try { return factory().ExistingFilesReplaced(mod); }
+            catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return []; }
+        });
+    }
+
+    private async Task<IReadOnlyList<string>> ReadPreviewAsync(string key, string slot, int generation, Func<IReadOnlyList<string>> read)
+    {
+        // never inside the caller (a binding's getter): the read is registered first, and its notify-all is raised from the dispatcher
+        await Task.Yield();
+        IReadOnlyList<string> files;
+        try { files = await Task.Run(read); }
+        finally { _previewReading.Remove(slot); }
+        if (generation != _previewGeneration) return files; // forgotten meanwhile: whoever shows it next reads what is there then
+        if (_previewReplaced.Count >= MaxPreviews) _previewReplaced.Clear();
+        _previewReplaced[key] = files;
+        Changed(string.Empty);
         return files;
     }
 

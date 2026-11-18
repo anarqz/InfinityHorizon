@@ -118,7 +118,7 @@ public sealed partial class ShellViewModel
         ArgumentNullException.ThrowIfNull(card);
         _selectedMod = card; _showModInfo = true; _showModOptions = false; _externalMod = null;
         // Alex (1.0.11): the information pane of a mod not installed says where it goes and what it replaces, with its Install
-        if (!card.Installed && !card.Manifest.IsExternal && card.Action != S["mods.adopt"]) { _installPreviewDigest = card.Manifest.Digest; _previewReplaced = null; }
+        if (!card.Installed && !card.Manifest.IsExternal && card.Action != S["mods.adopt"]) { _installPreviewDigest = card.Manifest.Digest; ForgetPreviews(); }
         Changed(string.Empty);
     }
 
@@ -976,7 +976,7 @@ public sealed partial class ShellViewModel
         if (current is not { CanAct: true }) return;
         // T5d: a card waiting for a dependency installs (or enables) that dependency first, as that card's own button does.
         if (current.Dependency is { } needed && ModCards.FirstOrDefault(c => c.Manifest.Id == needed.Id) is { } first) { await ActOnModAsync(first); return; }
-        if (_installConfirmedDigest != current.Manifest.Digest) _previewReplaced = null; // what is there now, never an earlier preview's
+        if (_installConfirmedDigest != current.Manifest.Digest) ForgetPreviews(); // what is there now, never an earlier preview's
         if (current.UpdateAvailable)
         {
             // M5: the reviewed change first, in the small confirmation (a player's-files mod: its own set-up pane, after the review)

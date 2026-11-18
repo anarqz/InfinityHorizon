@@ -115,7 +115,7 @@ public sealed partial class ShellViewModel
     public void CloseExternalSetup()
     {
         foreach (var check in _externalChecks.Values) check.Cancel();
-        _externalMod = null; _previewReplaced = null;
+        _externalMod = null; ForgetPreviews();
         if (ShowBrowser) StopBrowsing();
         ExternalRows.Clear(); BrowserEntries.Clear();
         Changed(string.Empty);
