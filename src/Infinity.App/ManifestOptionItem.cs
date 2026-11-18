@@ -53,7 +53,7 @@ public sealed class ManifestOptionItem(JsonElement definition, JsonElement value
     public string? FolderPath => IsFolder ? ModFolderOption.Resolve(definition, _text, azimuthRoot) : null;
     public bool HasFolder => FolderPath is not null;
     /// <summary>The read-only text of a folder option: its path, or its <c>emptyLabel</c>.</summary>
-    public string FolderText => !IsFolder ? "" : FolderPath ?? (_text == ModFolderOption.EmptyValue(definition) ? Localized("emptyLabel") ?? _text : _text);
+    public string FolderText => !IsFolder ? "" : FolderPath ?? (ModFolderOption.IsEmpty(definition, _text) ? Localized("emptyLabel") ?? _text : _text);
     /// <summary>A folder is named but is not there now (checked off the UI thread): the hint shows and Open hides.</summary>
     public bool FolderMissing => HasFolder && !_folderThere;
     public bool CanOpenFolder => HasFolder && _folderThere;
@@ -61,9 +61,11 @@ public sealed class ManifestOptionItem(JsonElement definition, JsonElement value
     public string FolderStart => CanOpenFolder ? FolderPath! : Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
 
     /// <summary>A folder the picker returned: stored when it is valid for this option (false: the form says why, nothing changes).</summary>
-    public bool ChooseFolder(string path)
+    /// <remarks>The text rules first, then (off the UI thread) the folder's real path: links, junctions and short names followed.</remarks>
+    public async Task<bool> ChooseFolderAsync(string path)
     {
         if (!IsFolder || !Editable || !ModFolderOption.ValidPath(path, modFolder)) return false;
+        if (await Task.Run(() => ModFolderOption.InsideOnDisk(path, modFolder))) return false;
         Text = path;
         return true;
     }

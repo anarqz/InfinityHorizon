@@ -142,15 +142,16 @@ public sealed partial class ShellViewModel
     {
         ArgumentNullException.ThrowIfNull(option);
         if (!option.IsFolder || !option.Editable) return;
-        OpenPicker(new FilePickRequest(option.Label, true, false, folder => { ChooseModFolder(option, folder); return Task.CompletedTask; })
+        OpenPicker(new FilePickRequest(option.Label, true, false, folder => ChooseModFolderAsync(option, folder))
         { Start = option.FolderStart });
     }
 
     /// <summary>A folder the picker returned for <paramref name="option"/>: a path it cannot store is refused with the reason.</summary>
-    public void ChooseModFolder(ManifestOptionItem option, string path)
+    public async Task ChooseModFolderAsync(ManifestOptionItem option, string path)
     {
         ArgumentNullException.ThrowIfNull(option);
-        if (option.ChooseFolder(path)) return;
+        ArgumentNullException.ThrowIfNull(path);
+        if (await option.ChooseFolderAsync(path)) return;
         Log("mods: folder refused for " + option.Id + " (" + path.Length + " characters)");
         Message = S["mods.folder.invalid"];
     }
