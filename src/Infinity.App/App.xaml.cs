@@ -75,6 +75,8 @@ public partial class App : Application
     /// <summary>How long the process may still run after the exit line before it is ended by force.</summary>
     internal static TimeSpan ExitGrace { get; set; } = TimeSpan.FromSeconds(10);
 
+    private static int _exitGuarded;
+
     /// <summary>T-1118: what the process held when it exited (numbers only), so a later look at a process that never ended is dated.</summary>
     private static string ExitMemory()
     {
@@ -97,6 +99,8 @@ public partial class App : Application
     /// </summary>
     internal static void GuardExit(int code, string after = "its exit")
     {
+        // one guard a process: the first of the window's close and the exit line starts it (two would race for the log line)
+        if (System.Threading.Interlocked.Exchange(ref _exitGuarded, 1) != 0) return;
         var grace = ExitGrace;
         try
         {
@@ -130,9 +134,9 @@ public partial class App : Application
             Directory.CreateDirectory(dir);
             File.AppendAllText(Path.Combine(dir, "launcher.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz} {line}{Environment.NewLine}");
         }
-        catch (IOException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // Logging never breaks the shell.
+            // Logging never breaks the shell (nor the exit guard's thread, where an escaped exception would be a crash).
         }
     }
 }
