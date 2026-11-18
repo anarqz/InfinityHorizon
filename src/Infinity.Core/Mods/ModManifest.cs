@@ -41,6 +41,12 @@ public sealed class ModManifest
     public string? ConfigPath { get; }
 
     /// <summary>
+    /// <c>config.openFolders</c>: the Azimuth-relative folders (outside <c>mods\</c>) the settings panel offers to open, such as EasyRadio's
+    /// music folder; <see cref="ModOpenFolder.Create"/> makes one that is not there yet. None when the manifest lists none.
+    /// </summary>
+    public IReadOnlyList<ModOpenFolder> OpenFolders { get; } = [];
+
+    /// <summary>
     /// OD-233: the game whose mods folder (<c>mods\&lt;game folder&gt;</c>, <see cref="ExtraOptionsLayout"/>) the mod installs into: its one
     /// game, or, for a mod that declares several, the one its destinations name. Destinations written for the old flat layout
     /// (<c>mods/&lt;id&gt;/…</c>, every catalog entry before OD-233) are read as that game's folder (<see cref="ExtraOptionsLayout.CanonicalDestination"/>):
@@ -165,7 +171,11 @@ public sealed class ModManifest
                         if (choices.Length is < 1 or > 64 || choices.Distinct(StringComparer.Ordinal).Count() != choices.Length
                             || choices.Any(v => v.Length is < 1 or > 64 || v.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-'))))
                             throw new ModException("invalid enum token");
+                        // a choice's label, when present, is localized text with English (the form shows it in the ComboBox)
+                        foreach (var choice in option.GetProperty("choices").EnumerateArray())
+                            if (choice.TryGetProperty("label", out var choiceLabel)) ValidateLocalized(choiceLabel);
                     }
+                    if (option.GetProperty("type").GetString() == ModFolderOption.Type) ValidateFolderOption(option);
                     ModMultiplayer.ValidateValue(option, option.GetProperty("default"));
                     if (option.TryGetProperty("lockedValue", out var locked)) ModMultiplayer.ValidateValue(option, locked);
                     foreach (var field in new[] { "label", "description", "lockReason" })
@@ -177,6 +187,7 @@ public sealed class ModManifest
                     if (option.TryGetProperty("lockReason", out _) && !option.TryGetProperty("lockedValue", out _)) throw new ModException("lock reason without a locked value");
                 }
             }
+            if (config.TryGetProperty("openFolders", out var openFolders)) OpenFolders = ParseOpenFolders(openFolders);
         }
         Digest = Hash(_bytes);
         var files = new List<ManifestFile>();
@@ -351,6 +362,72 @@ public sealed class ModManifest
     {
         if (value.ValueKind != JsonValueKind.String || value.GetString() is not { Length: > 0 and <= 4096 })
             throw new ModException("invalid manifest text");
+    }
+
+    private static void ValidateLocalized(JsonElement text)
+    {
+        if (text.ValueKind != JsonValueKind.Object || !text.TryGetProperty("en", out var english)) throw new ModException("invalid localized text");
+        foreach (var value in text.EnumerateObject()) ValidateText(value.Value);
+        ValidateText(english);
+    }
+
+    private static bool Token(string? value) => value is { Length: > 0 and <= 64 } && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+
+    /// <summary>
+    /// An Azimuth-relative folder a manifest names outside the mods (<c>config.openFolders[].path</c>, a <c>folder</c> option's
+    /// <c>tokenFolder</c>): a valid relative path whose first segment is not <c>mods</c>, so no mod's uninstall deletes it.
+    /// </summary>
+    private static string AzimuthFolder(JsonElement value)
+    {
+        var path = value.ValueKind == JsonValueKind.String ? value.GetString()! : throw new ModException("invalid mod path");
+        ValidatePath(path);
+        if (path.Split('/')[0].Equals(ExtraOptionsMods.ModsFolder, StringComparison.OrdinalIgnoreCase)) throw new ModException("a mod's own folders are not settings folders");
+        return path;
+    }
+
+    /// <summary>
+    /// A <c>folder</c> option (<see cref="ModFolderOption"/>): <c>emptyValue</c> an enum-style token with its localized <c>emptyLabel</c>;
+    /// optional older <c>tokens</c> with the Azimuth-relative <c>tokenFolder</c> they name folders in; a default that is the empty token or
+    /// one of those (a path is this PC's own); no locked value.
+    /// </summary>
+    private static void ValidateFolderOption(JsonElement option)
+    {
+        var empty = option.TryGetProperty("emptyValue", out var emptyValue) && emptyValue.ValueKind == JsonValueKind.String ? emptyValue.GetString() : null;
+        if (!Token(empty) || !option.TryGetProperty("emptyLabel", out var emptyLabel)) throw new ModException("invalid folder option");
+        ValidateLocalized(emptyLabel);
+        // the plugin compares the empty value and the tokens in any case: so do these checks
+        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (option.TryGetProperty("tokens", out var list))
+        {
+            foreach (var token in list.EnumerateArray())
+                if (token.ValueKind != JsonValueKind.String || !Token(token.GetString()) || string.Equals(token.GetString(), empty, StringComparison.OrdinalIgnoreCase) || !tokens.Add(token.GetString()!))
+                    throw new ModException("invalid folder option");
+            if (tokens.Count is 0 or > 64) throw new ModException("invalid folder option");
+            AzimuthFolder(option.TryGetProperty("tokenFolder", out var tokenFolder) ? tokenFolder : throw new ModException("invalid folder option"));
+        }
+        else if (option.TryGetProperty("tokenFolder", out _)) throw new ModException("invalid folder option");
+        if (option.GetProperty("default") is not { ValueKind: JsonValueKind.String } value || !string.Equals(value.GetString(), empty, StringComparison.OrdinalIgnoreCase) && !tokens.Contains(value.GetString()!)
+            || option.TryGetProperty("lockedValue", out _))
+            throw new ModException("invalid folder option");
+    }
+
+    private static ModOpenFolder[] ParseOpenFolders(JsonElement list)
+    {
+        if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 8) throw new ModException("invalid settings folders");
+        var folders = new List<ModOpenFolder>();
+        foreach (var item in list.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || item.EnumerateObject().Any(p => p.Name is not ("root" or "path" or "label" or "create"))
+                || !item.TryGetProperty("root", out var root) || root.ValueKind != JsonValueKind.String || root.GetString() != "azimuth"
+                || !item.TryGetProperty("path", out var rawPath) || !item.TryGetProperty("label", out var label)) throw new ModException("invalid settings folders");
+            var path = AzimuthFolder(rawPath);
+            ValidateLocalized(label);
+            var create = item.TryGetProperty("create", out var flag)
+                ? flag.ValueKind is JsonValueKind.True or JsonValueKind.False ? flag.GetBoolean() : throw new ModException("invalid settings folders") : false;
+            if (folders.Any(f => f.Path.Equals(path, StringComparison.OrdinalIgnoreCase))) throw new ModException("invalid settings folders");
+            folders.Add(new(path, label.Clone(), create));
+        }
+        return [.. folders];
     }
 
     /// <summary>OD-114's reserved prefix of the retired custom mods (OD-232): only an installed one's manifest still carries it.</summary>

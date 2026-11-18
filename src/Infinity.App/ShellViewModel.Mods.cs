@@ -8,29 +8,6 @@ using Infinity.Core.Mods;
 
 namespace Infinity.App;
 
-/// <summary>One manifest option in the form. Numbers show in the player's culture; locked options are read-only with the manifest's reason.</summary>
-public sealed class ManifestOptionItem(JsonElement definition, JsonElement value, string locale, Action changed) : INotifyPropertyChanged
-{
-    private readonly CultureInfo _culture = CultureInfo.GetCultureInfo(locale);
-    public string Id => definition.GetProperty("id").GetString()!;
-    public string Label => Localized("label") ?? Id;
-    public string Help => Localized("description") ?? "";
-    public bool IsBoolean => definition.GetProperty("type").GetString() == "boolean";
-    public bool IsChoice => definition.GetProperty("type").GetString() == "enum";
-    public bool IsNumber => !IsBoolean && !IsChoice;
-    public bool Editable => !definition.TryGetProperty("lockedValue", out _);
-    public string LockReason => Editable ? "" : Localized("lockReason") ?? "";
-    public bool HasLockReason => LockReason.Length > 0;
-    public CultureInfo Culture => _culture;
-    public IReadOnlyList<string> Choices => IsChoice ? definition.GetProperty("choices").EnumerateArray().Select(c => c.GetProperty("value").GetString()!).ToArray() : [];
-    private string _text = ManifestIni.Display(definition.TryGetProperty("lockedValue", out var locked) ? locked : value, CultureInfo.GetCultureInfo(locale));
-    public string Text { get => _text; set { if (_text == value) return; _text = value; PropertyChanged?.Invoke(this, new(nameof(Text))); PropertyChanged?.Invoke(this, new(nameof(Checked))); changed(); } }
-    public bool Checked { get => _text is "1" or "true"; set => Text = value ? "1" : "0"; }
-    public event PropertyChangedEventHandler? PropertyChanged;
-    private string? Localized(string field) => definition.TryGetProperty(field, out var texts)
-        ? (texts.TryGetProperty(locale, out var text) ? text : texts.GetProperty("en")).GetString()! : null;
-}
-
 public sealed partial class ShellViewModel
 {
     private static readonly HttpClient ModDownloads = new(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false, Credentials = null }) { Timeout = Timeout.InfiniteTimeSpan };
@@ -96,7 +73,7 @@ public sealed partial class ShellViewModel
 
     private async Task LoadSelectedOptionsAsync()
     {
-        _ini = null; _iniManifest = null; _iniDirty = false; ModOptions.Clear();
+        _ini = null; _iniManifest = null; _iniDirty = false; ModOptions.Clear(); ModOpenFolders = [];
         if (_selectedMod is not { HasOptions: true } selected || ModManagerFactory() is not { } factory) return;
         try
         {
@@ -107,9 +84,16 @@ public sealed partial class ShellViewModel
                 ? Infinity.Core.Process.ExtraOptionsInfinity.ReadSettings(root, game) : factory().ReadSettings(selected.Manifest));
             if (!ReferenceEquals(_selectedMod, selected) && _selectedMod?.Manifest.Digest != selected.Manifest.Digest) return;
             _ini = ini; _iniManifest = selected.Manifest.Digest; ModOptions.Clear();
+            var modFolder = selected.BuiltIn ? null : ModFolderOption.ModFolder(selected.Manifest, root);
             foreach (var option in selected.Manifest.Document.GetProperty("config").GetProperty("options").EnumerateArray())
-                ModOptions.Add(new(option, _ini.Values[option.GetProperty("id").GetString()!], S.Locale,
-                    () => { _iniDirty = true; Changed(nameof(IniDirty)); }));
+            {
+                var item = new ManifestOptionItem(option, _ini.Values[option.GetProperty("id").GetString()!], S.Locale,
+                    () => { _iniDirty = true; Changed(nameof(IniDirty)); }, root, modFolder);
+                ModOptions.Add(item);
+                if (item.IsFolder) _ = item.CheckFolder();
+            }
+            ModOpenFolders = root is null ? [] : selected.Manifest.OpenFolders.Select(f => new ModOpenFolderItem(f, f.Text(S.Locale))).ToArray();
+            Changed(nameof(ModOpenFolders));
         }
         catch (Exception e) when (e is System.IO.DirectoryNotFoundException or System.IO.FileNotFoundException)
         {
@@ -146,6 +130,64 @@ public sealed partial class ShellViewModel
         await LoadSelectedOptionsAsync(); Changed(string.Empty);
     }
     public void RevertIni() => _ = GuardAsync("undo the options", RevertIniAsync);
+
+    /// <summary>The selected mod's <c>config.openFolders</c> buttons (none without an Azimuth folder).</summary>
+    public IReadOnlyList<ModOpenFolderItem> ModOpenFolders { get; private set; } = [];
+
+    /// <summary>
+    /// Choose folder…: the launcher's own picker (owner 2026-10-28: never the Windows dialog; controller, Steam keyboard and Wine
+    /// places included), starting at the option's folder when it is there, else the player's Music folder.
+    /// </summary>
+    public void ChooseModFolderWithPicker(ManifestOptionItem option)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        if (!option.IsFolder || !option.Editable) return;
+        OpenPicker(new FilePickRequest(option.Label, true, false, folder => ChooseModFolderAsync(option, folder))
+        { Start = option.FolderStart });
+    }
+
+    /// <summary>A folder the picker returned for <paramref name="option"/>: a path it cannot store is refused with the reason.</summary>
+    public async Task ChooseModFolderAsync(ManifestOptionItem option, string path)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        ArgumentNullException.ThrowIfNull(path);
+        if (await option.ChooseFolderAsync(path)) return;
+        Log("mods: folder refused for " + option.Id + " (" + path.Length + " characters)");
+        Message = S["mods.folder.invalid"];
+    }
+
+    /// <summary>Open: the option's folder in Explorer.</summary>
+    public void OpenOptionFolder(ManifestOptionItem option)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        if (option.FolderPath is { } folder) OpenInExplorer(folder, create: false);
+    }
+
+    /// <summary>A <c>config.openFolders</c> button: the Azimuth folder, created first when the manifest says so, in Explorer.</summary>
+    public void OpenModSettingsFolder(ModOpenFolderItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        if (_install?.Root is { } root) OpenInExplorer(item.Folder.Under(root), item.Folder.Create);
+    }
+
+    private void OpenInExplorer(string folder, bool create)
+    {
+        _ = GuardAsync("open a settings folder", async () =>
+        {
+            try
+            {
+                // off the UI thread: a UNC folder of an absent server may take seconds to answer
+                var there = await Task.Run(() => { if (create) System.IO.Directory.CreateDirectory(folder); return System.IO.Directory.Exists(folder); });
+                if (!there) { Message = S["mods.folder.missing"]; return; }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true })?.Dispose();
+            }
+            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException or NotSupportedException)
+            {
+                Log("mods: folder not opened: " + e.GetType().Name);
+                Message = S["eomods.folder_not_opened"];
+            }
+        });
+    }
     private static bool GameRunning()
     {
         var processes = System.Diagnostics.Process.GetProcessesByName("azimuth");

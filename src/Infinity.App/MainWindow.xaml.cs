@@ -825,6 +825,21 @@ public partial class MainWindow : Window
 
     private void OnSaveIni(object sender, RoutedEventArgs e) => _vm.SaveIni();
 
+    // CR batch 1118 (EasyRadio): a folder option's three buttons, and the manifest's settings folders
+    private void OnChooseModFolder(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is ManifestOptionItem option) _vm.ChooseModFolderWithPicker(option);
+    }
+    private void OnClearModFolder(object sender, RoutedEventArgs e) => ((sender as FrameworkElement)?.DataContext as ManifestOptionItem)?.ClearFolder();
+    private void OnOpenOptionFolder(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is ManifestOptionItem option) _vm.OpenOptionFolder(option);
+    }
+    private void OnOpenModSettingsFolder(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is ModOpenFolderItem item) _vm.OpenModSettingsFolder(item);
+    }
+
 
     // CR-S62: the moderation pane: opening focuses its first control, Escape (B) closes it.
     private void OnToggleModerationPane(object sender, RoutedEventArgs e)

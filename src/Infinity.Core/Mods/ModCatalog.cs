@@ -132,6 +132,8 @@ public static class ModCatalogTrust
                     var option = manifest.Document.GetProperty("config") is { ValueKind: JsonValueKind.Object } config
                         ? config.GetProperty("options").EnumerateArray().FirstOrDefault(o => o.GetProperty("id").GetString() == setting.OptionId) : default;
                     if (option.ValueKind != JsonValueKind.Object) throw new ModException("catalog requires an unknown setting", ModErrors.Catalog);
+                    // a folder is the player's own path on this PC: no catalog requires one (as no lobby does)
+                    if (option.GetProperty("type").GetString() == ModFolderOption.Type) throw new ModException("catalog requires a folder setting", ModErrors.Catalog);
                     ModMultiplayer.ValidateValue(option, setting.Value);
                 }
             result.Add(new(entry.Id, entry.Required!));

@@ -28,6 +28,9 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
         if (options.Select(o => o.GetProperty("id").GetString()).Distinct(StringComparer.Ordinal).Count() != options.Length
             || settings.Any(s => !options.Any(o => o.GetProperty("id").GetString() == s)))
             throw new ModException("unknown multiplayer setting");
+        // a folder is the player's own path on this PC: it never takes part in a lobby's settings
+        if (settings.Any(s => options.Any(o => o.GetProperty("id").GetString() == s && o.GetProperty("type").GetString() == ModFolderOption.Type)))
+            throw new ModException("a folder setting never takes part in multiplayer");
         return new(impact, id, revision, Array.AsReadOnly(settings));
     }
 
@@ -72,7 +75,8 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
     private static bool Identifier(string? value) => value is { Length: > 0 and <= 64 }
         && value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 
-    internal static void ValidateValue(JsonElement option, JsonElement value)
+    /// <param name="modFolder">The mod's own absolute folder, which a <c>folder</c> value may not be or be inside (null: not checked).</param>
+    internal static void ValidateValue(JsonElement option, JsonElement value, string? modFolder = null)
     {
         var type = option.GetProperty("type").GetString();
         if (type == "boolean" && value.ValueKind is JsonValueKind.True or JsonValueKind.False) return;
@@ -83,6 +87,7 @@ public sealed record ModMultiplayer(string Impact, string CompatibilityId, int R
             && (number - option.GetProperty("minimum").GetDecimal()) % option.GetProperty("step").GetDecimal() == 0) return;
         if (type == "enum" && value.ValueKind == JsonValueKind.String && option.GetProperty("choices").EnumerateArray()
             .Any(c => c.GetProperty("value").GetString() == value.GetString())) return;
+        if (type == ModFolderOption.Type && value.ValueKind == JsonValueKind.String && ModFolderOption.Valid(option, value.GetString(), modFolder)) return;
         throw new ModException("invalid effective multiplayer setting");
     }
 }

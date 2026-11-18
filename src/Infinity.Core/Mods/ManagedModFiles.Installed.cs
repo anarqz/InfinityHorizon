@@ -82,7 +82,7 @@ public sealed partial class ManagedModFiles
         if (manifest.ConfigPath is { } config)
         {
             var path = Target("azimuth", config); var before = Current(path);
-            var ini = new ManifestIni(manifest, before is null ? ManifestIni.Defaults(manifest) : File.ReadAllBytes(path));
+            var ini = new ManifestIni(manifest, before is null ? ManifestIni.Defaults(manifest) : File.ReadAllBytes(path), ModFolderOption.ModFolder(manifest, _azimuth));
             ini.EnforceLocks(); var after = Store(ini.ToBytes());
             if (before is not null) Store(File.ReadAllBytes(path));
             if (before != after) changes.Add(new("azimuth", config, before, after));
@@ -126,7 +126,7 @@ public sealed partial class ManagedModFiles
                 if (ReceiptFor(id) is not { Enabled: true }) throw Refused("required dependency is disabled or incompatible", ModRelated.Off);
                 if (!versions.Contains(next.Version)) throw Refused("required dependency is disabled or incompatible", ModRelated.Version);
                 CheckDependencies(next, visiting, planned);
-                CheckRequiredSettings(dependency, PlannedSettings(next), Refused);
+                CheckRequiredSettings(next, dependency, () => PlannedSettings(next), Refused);
                 continue;
             }
             // OD-232: an installation in a retired format satisfies nothing; it is only there to be removed
@@ -136,7 +136,7 @@ public sealed partial class ManagedModFiles
             if (!VerifiedOnce(target)) throw Refused("required dependency is disabled or incompatible", ModRelated.Changed);
             CheckDependencies(target, visiting, planned);
             if (dependency.TryGetProperty("settings", out var settings) && settings.GetArrayLength() > 0)
-                CheckRequiredSettings(dependency, ReadSettings(target).Values, Refused);
+                CheckRequiredSettings(target, dependency, () => ReadSettings(target).Values, Refused);
         }
         if (manifest.Document.TryGetProperty("conflicts", out var conflicts))
             foreach (var conflict in conflicts.EnumerateArray())
@@ -152,10 +152,17 @@ public sealed partial class ManagedModFiles
         visiting.Remove(manifest.Id);
     }
 
-    /// <summary>The values a dependency entry's <c>settings</c> requires, compared with <paramref name="values"/>; a difference is refused.</summary>
-    private static void CheckRequiredSettings(JsonElement dependency, IReadOnlyDictionary<string, JsonElement> values, Func<string, string, ModException> refused)
+    /// <summary>
+    /// The values a dependency entry's <c>settings</c> requires of <paramref name="target"/>, compared with <paramref name="values"/>; a
+    /// difference is refused. A folder option is never a requirement (batch 1118): refused before any value is read.
+    /// </summary>
+    private static void CheckRequiredSettings(ModManifest target, JsonElement dependency, Func<IReadOnlyDictionary<string, JsonElement>> read,
+        Func<string, string, ModException> refused)
     {
-        if (!dependency.TryGetProperty("settings", out var settings) || settings.ValueKind != JsonValueKind.Array) return;
+        if (!dependency.TryGetProperty("settings", out var settings) || settings.ValueKind != JsonValueKind.Array || settings.GetArrayLength() == 0) return;
+        if (settings.EnumerateArray().Any(s => ModFolderOption.IsFolderSetting(target, s.GetProperty("optionId").GetString())))
+            throw new ModException("a dependency cannot require a folder setting", ModErrors.Dependency);
+        var values = read();
         foreach (var setting in settings.EnumerateArray())
             if (!values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
                 || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw refused("required dependency settings differ", ModRelated.Settings);
@@ -185,7 +192,7 @@ public sealed partial class ManagedModFiles
             foreach (var dependency in dependent.Document.GetProperty("dependencies").EnumerateArray().Where(d => d.GetProperty("id").GetString() == next.Id))
             {
                 var versions = dependency.GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray();
-                CheckRequiredSettings(dependency, values ??= PlannedSettings(next), (_, _) => new ModException("enabled dependent requires this setting", ModErrors.Dependency)
+                CheckRequiredSettings(next, dependency, () => values ??= PlannedSettings(next), (_, _) => new ModException("enabled dependent requires this setting", ModErrors.Dependency)
                 { Related = dependent.Id, RelatedVersions = versions, RelatedIsDependent = true, RelatedProblem = ModRelated.Settings });
             }
         }
@@ -265,7 +272,8 @@ public sealed partial class ManagedModFiles
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ModException) { }
     }
 
-    public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))));
+    public ManifestIni ReadSettings(ModManifest manifest) => new(manifest, File.ReadAllBytes(Target("azimuth", manifest.ConfigPath ?? throw new ModException("settings missing", ModErrors.Settings))),
+        ModFolderOption.ModFolder(manifest, _azimuth));
 
     public void SaveSettings(ModManifest manifest, ManifestIni settings)
     {
@@ -279,12 +287,14 @@ public sealed partial class ManagedModFiles
         if (receipt.Enabled) CheckDependencies(manifest);
         settings.EnforceLocks();
         var bytes = settings.ToBytes();
-        var parsed = new ManifestIni(manifest, bytes);
+        var parsed = new ManifestIni(manifest, bytes, ModFolderOption.ModFolder(manifest, _azimuth));
         foreach (var dependent in InstalledManifests().Where(m => Receipt(m) is { Enabled: true }))
             foreach (var dependency in dependent.Document.GetProperty("dependencies").EnumerateArray().Where(d => d.GetProperty("id").GetString() == manifest.Id))
                 if (dependency.TryGetProperty("settings", out var required))
                     foreach (var setting in required.EnumerateArray())
-                        if (!parsed.Values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
+                        if (ModFolderOption.IsFolderSetting(manifest, setting.GetProperty("optionId").GetString()))
+                            throw new ModException("a dependency cannot require a folder setting", ModErrors.Dependency);
+                        else if (!parsed.Values.TryGetValue(setting.GetProperty("optionId").GetString()!, out var value)
                             || !JsonElement.DeepEquals(value, setting.GetProperty("value"))) throw new ModException("enabled dependent requires this setting", ModErrors.Dependency);
         Store(File.ReadAllBytes(config));
         var changes = new List<ModFileChange> { new("azimuth", manifest.ConfigPath!, settings.SourceHash, Store(bytes)) };

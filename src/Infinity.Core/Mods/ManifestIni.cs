@@ -19,14 +19,18 @@ public sealed class ManifestIni
     private readonly List<string> _lines;
     private readonly string _newline;
     private readonly List<string> _endings = [];
-    private readonly Encoding _encoding;
+    private Encoding _encoding;
     public string SourceHash { get; }
     internal string ManifestDigest => _manifest.Digest;
     public IReadOnlyDictionary<string, JsonElement> Values => Read().Values;
     public IReadOnlyList<ManifestIniIssue> Issues => Read().Issues;
-    public ManifestIni(ModManifest manifest, byte[] bytes)
+    private readonly string? _modFolder;
+
+    /// <param name="modFolder">The mod's own absolute folder (<see cref="ModFolderOption.ModFolder"/>): a <c>folder</c> value inside it is invalid; null: not checked.</param>
+    public ManifestIni(ModManifest manifest, byte[] bytes, string? modFolder = null)
     {
         _manifest = manifest;
+        _modFolder = modFolder;
         if (bytes.Length > 64 * 1024) throw new ModException("settings too large");
         SourceHash = ModManifest.Hash(bytes);
         int skip;
@@ -69,13 +73,24 @@ public sealed class ManifestIni
     public void Set(string id, string text, CultureInfo? culture = null)
     {
         var option = Options(_manifest).Single(o => o.GetProperty("id").GetString() == id);
-        var value = Parse(option, text, culture);
-        try { ModMultiplayer.ValidateValue(option, value); }
-        catch (ModException) { throw new ModException("invalid setting value", ModErrors.Settings); }
-        if (option.TryGetProperty("lockedValue", out var locked) && !JsonElement.DeepEquals(locked, value)) throw new ModException("this setting is locked by Infinity", ModErrors.Locked);
+        var folder = option.GetProperty("type").GetString() == ModFolderOption.Type;
         var section = option.GetProperty("section").GetString()!;
         var key = option.GetProperty("key").GetString()!;
         var index = Find(section, key);
+        // a folder left as it is stays as it is: a value written by hand that the plugin uses is never rewritten or refused
+        if (folder && index >= 0 && RawValue(_lines[index]) == text) return;
+        var value = Parse(option, text, culture);
+        try { ModMultiplayer.ValidateValue(option, value, _modFolder); }
+        catch (ModException) { throw new ModException("invalid setting value", ModErrors.Settings); }
+        if (option.TryGetProperty("lockedValue", out var locked) && !JsonElement.DeepEquals(locked, value)) throw new ModException("this setting is locked by Infinity", ModErrors.Locked);
+        // a folder that is there: its real path (links, junctions, short names) outside the mod's own folder too
+        if (folder && ModFolderOption.ValidPath(text, null) && ModFolderOption.InsideOnDisk(text, _modFolder))
+            throw new ModException("a folder inside the mod's own folder", ModErrors.Settings);
+        var encoded = Encode(value);
+        // the plugin reads raw UTF-8: a non-ASCII folder turns a Latin-1 or UTF-16 file into UTF-8, its whole text kept
+        if (folder && encoded.Any(c => c > 127) && _encoding is not UTF8Encoding) _encoding = new UTF8Encoding(false);
+        // any other value in a one-byte (Latin-1) file must survive it, never turn into '?'
+        if (_encoding.GetString(_encoding.GetBytes(encoded)) != encoded) throw new ModException("the settings file cannot hold this text", ModErrors.Settings);
         if (index >= 0)
         {
             var line = _lines[index]; var start = line.IndexOf('=') + 1;
@@ -83,7 +98,8 @@ public sealed class ManifestIni
             var end = line.IndexOfAny([';', '#'], start); if (end < 0) end = line.Length;
             while (end > start && char.IsWhiteSpace(line[end - 1])) end--;
             var quoted = end - start >= 2 && line[start] == '"' && line[end - 1] == '"';
-            _lines[index] = line[..start] + (quoted ? "\"" + Encode(value) + "\"" : Encode(value)) + line[end..];
+            // a folder is always written unquoted (the CR); other values keep their quotes
+            _lines[index] = line[..start] + (quoted && !folder ? "\"" + encoded + "\"" : encoded) + line[end..];
         }
         else
         {
@@ -160,16 +176,20 @@ public sealed class ManifestIni
             {
                 try
                 {
-                    var parsed = Parse(option, _lines[lines[0]][(_lines[lines[0]].IndexOf('=') + 1)..].Split(';', '#')[0].Trim().Trim('"'), null);
-                    ModMultiplayer.ValidateValue(option, parsed);
+                    var parsed = Parse(option, RawValue(_lines[lines[0]]), null);
+                    ModMultiplayer.ValidateValue(option, parsed, _modFolder);
                     value = parsed;
                 }
+                // a folder the plugin itself uses is read as it is (never an issue, so Repair never resets it)
+                catch (ModException) when (option.GetProperty("type").GetString() == ModFolderOption.Type && ModFolderOption.PluginUses(option, RawValue(_lines[lines[0]])))
+                { value = JsonSerializer.SerializeToElement(RawValue(_lines[lines[0]])); }
                 catch (ModException) { issues.Add(new(id, "invalid")); }
             }
             result.Add(id, value);
         }
         return (result, issues);
     }
+    private static string RawValue(string line) => line[(line.IndexOf('=') + 1)..].Split(';', '#')[0].Trim().Trim('"');
     private int Find(string section, string key) => Lines(section, key) is { Count: > 0 } found ? found[0] : -1;
     private List<int> Lines(string section, string key)
     {
@@ -197,6 +217,8 @@ public sealed class ManifestIni
             : decimal.TryParse(value.Trim(), NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var number)
             ? JsonSerializer.SerializeToElement(number) : throw new ModException("invalid number", ModErrors.Settings),
         "enum" => JsonSerializer.SerializeToElement(value),
+        // a folder path is stored as it is; ModFolderOption decides whether it is valid
+        ModFolderOption.Type => JsonSerializer.SerializeToElement(value),
         _ => throw new ModException("unsupported option"),
     };
     /// <summary>The on-disk text of a value: 0/1, the exact enum token, or an invariant number.</summary>
