@@ -32,7 +32,11 @@ public partial class App : Application
         // T4b: why the launcher ended, so a log never just stops (a fatal fault, or which way it was closed). No personal data: the
         // reason and the exit code only; a fault's exception as the other handlers log it.
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log("fatal: " + e.ExceptionObject + (e.IsTerminating ? " (terminating)" : ""));
-        Exit += (_, e) => Log("exit: " + ExitReason + ", code " + e.ApplicationExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Exit += (_, e) =>
+        {
+            Log("exit: " + ExitReason + ", code " + e.ApplicationExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + ExitMemory());
+            GuardExit(e.ApplicationExitCode);
+        };
         SessionEnding += (_, e) => ExitReason = "Windows session ending (" + e.ReasonSessionEnding + ")";
     }
 
@@ -67,6 +71,45 @@ public partial class App : Application
 
     /// <summary>How the launcher is ending, for the exit line in launcher.log; the window close is the default.</summary>
     internal static string ExitReason { get; set; } = "window closed";
+
+    /// <summary>How long the process may still run after the exit line before it is ended by force.</summary>
+    internal static TimeSpan ExitGrace { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>T-1118: what the process held when it exited (numbers only), so a later look at a process that never ended is dated.</summary>
+    private static string ExitMemory()
+    {
+        try
+        {
+            var m = Infinity.Core.Diagnostics.MemorySample.Current();
+            static string Mb(long bytes) => (bytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return "; memory: private " + Mb(m.PrivateBytes) + " MB (managed heap " + Mb(m.ManagedHeap) + " MB, gc committed " + Mb(m.GcCommitted) + " MB), handles "
+                + m.Handles.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", threads " + m.Threads.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return string.Empty; }
+    }
+
+    /// <summary>
+    /// T-1118: on 2026-11-17 the launcher logged "exit: window closed" at 17:13:34 and its process was still there the next morning, with
+    /// no window. Once the exit line is written nothing of the launcher is left to do, so a process that is still running
+    /// <see cref="ExitGrace"/> later (a thread that keeps it alive, a wait in the runtime's shutdown) says so in the log and ends itself.
+    /// The guard is a background thread: it never keeps the process alive, and a normal exit (under 0.1 s) ends it first.
+    /// </summary>
+    private static void GuardExit(int code)
+    {
+        var grace = ExitGrace;
+        try
+        {
+            new System.Threading.Thread(() =>
+            {
+                System.Threading.Thread.Sleep(grace);
+                Log("exit: the process was still running " + ((long)grace.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + " s after its exit; ended by force" + ExitMemory());
+                // TerminateProcess: no shutdown code of any library runs again (that is what did not finish)
+                try { using var self = System.Diagnostics.Process.GetCurrentProcess(); self.Kill(); }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { Environment.Exit(code); }
+            }) { IsBackground = true, Name = "exit-guard" }.Start();
+        }
+        catch (Exception e) when (e is OutOfMemoryException or System.Threading.ThreadStateException) { Log("exit: guard not started (" + e.GetType().Name + ")"); }
+    }
 
     private static void OnDispatcherUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
