@@ -1108,6 +1108,8 @@ public sealed partial class ShellViewModel
         finally
         {
             _modOperation = false; _modLockLabel = null; Busy = false;
+            // T-1118: the operation changed files (or stopped half way): another mod's "replaces N files" is read again when shown
+            ForgetPreviews();
             if (succeeded && preserveOptionsOnFailure) _iniDirty = false; // a saved draft reloads from the file; a failed one stays
             if (only is not null) await RefreshModEntriesAsync(only);
             else await RefreshModsAsync();

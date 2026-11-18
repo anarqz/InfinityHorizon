@@ -1,5 +1,6 @@
 {
   "mods.preview_into": "Instala em {path}",
+  "mods.preview_unreadable": "Instala em {path} · não foi possível ler os arquivos que ele substituiria ({reason})",
   "mods.preview_replaces": "Instala em {path} · substitui {count} arquivos (guardados e restaurados ao desativar ou desinstalar)",
   "mods.preview_replaces_one": "Instala em {path} · substitui 1 arquivo (guardado e restaurado ao desativar ou desinstalar)",
   "mods.install_replacing": "Substituir {count} arquivos e instalar",

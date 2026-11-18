@@ -128,6 +128,9 @@ public sealed partial class ShellViewModel
     internal async Task RefreshLocalFactsQuietlyAsync()
     {
         if (!InShell || _busy || _busyState.IsBusy || Playing || _install is null) return;
+        // T-1118: the window is back in front: the game's files may have changed meanwhile, so a shown preview is read again (one
+        // notify-all, only when a preview was known)
+        if (ForgetPreviews()) Changed(string.Empty);
         var before = _saveScan.Computations;
         var wasRunning = _gameRunning;
         await PrimeLocalFactsQuietlyAsync(); // the window's Activated handler: an error is logged, never thrown into the dispatcher

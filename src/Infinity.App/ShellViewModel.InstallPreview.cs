@@ -21,15 +21,27 @@ public sealed partial class ShellViewModel
     // end (hundreds of notify-alls a second, a mod manager built for each, the window's thread never free again, memory by the gigabyte).
     private readonly Dictionary<string, IReadOnlyList<string>> _previewReplaced = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Task<IReadOnlyList<string>>> _previewReading = new(StringComparer.Ordinal);
+    /// <summary>The previews whose read failed (the reason shown in place of the count); known, so nothing reads them again in a loop.</summary>
+    private readonly Dictionary<string, string> _previewFailed = new(StringComparer.Ordinal);
     private int _previewGeneration;
+
+    /// <summary>Test seam: the preview reads started since the start.</summary>
+    internal int PreviewReads { get; private set; }
 
     private string PreviewKey(ModManifest mod) => mod.Digest + "|" + _install?.Root;
 
-    /// <summary>What is there now, never an earlier preview's: every preview is read again when next shown (a read in flight is dropped).</summary>
-    internal void ForgetPreviews()
+    /// <summary>
+    /// What is there now, never an earlier preview's: every preview is read again when next shown (a read in flight is dropped). Called
+    /// when a card's button acts, when a mod operation ends (it changed the files another mod's preview counted) and when the window
+    /// comes back to the front (the player may have changed the game's files meanwhile). True when a preview was known.
+    /// </summary>
+    internal bool ForgetPreviews()
     {
+        var known = _previewReplaced.Count > 0;
         _previewReplaced.Clear();
+        _previewFailed.Clear();
         _previewGeneration++;
+        return known;
     }
 
     /// <summary>A card's Install that writes files (not an adoption, not a player's-files mod: those have their own pane).</summary>
@@ -75,23 +87,35 @@ public sealed partial class ShellViewModel
         var generation = _previewGeneration;
         var slot = generation.ToString(CultureInfo.InvariantCulture) + ":" + key;
         if (_previewReading.TryGetValue(slot, out var reading)) return reading;
-        return _previewReading[slot] = ReadPreviewAsync(key, slot, generation, () =>
-        {
-            try { return factory().ExistingFilesReplaced(mod); }
-            catch (Exception error) when (ManagedModFiles.IsStateError(error)) { return []; }
-        });
+        // a failure of the read (the mod manager's state errors included) is caught by ReadPreviewAsync: shown with its reason, never
+        // passed off as "replaces nothing"
+        return _previewReading[slot] = ReadPreviewAsync(key, slot, generation,
+            () => PreviewReadForTests is { } fake ? fake(mod) : factory().ExistingFilesReplaced(mod));
     }
+
+    /// <summary>Test seam: the read of the files a mod would replace (in place of the mod manager's).</summary>
+    internal Func<ModManifest, IReadOnlyList<string>>? PreviewReadForTests { get; set; }
 
     private async Task<IReadOnlyList<string>> ReadPreviewAsync(string key, string slot, int generation, Func<IReadOnlyList<string>> read)
     {
         // never inside the caller (a binding's getter): the read is registered first, and its notify-all is raised from the dispatcher
         await Task.Yield();
-        IReadOnlyList<string> files;
+        PreviewReads++;
+        IReadOnlyList<string> files = [];
+        string? failure = null;
         try { files = await Task.Run(read); }
+        // a read that fails (a file in use, a folder that cannot be listed) is an answer too: logged, shown with its reason, and not
+        // read again until the previews are forgotten (never an unobserved task, never a loop)
+        catch (Exception error) when (!IsFatal(error))
+        {
+            failure = error.GetType().Name;
+            Log("mods: the files a mod would replace could not be read (" + failure + ")");
+        }
         finally { _previewReading.Remove(slot); }
         if (generation != _previewGeneration) return files; // forgotten meanwhile: whoever shows it next reads what is there then
-        if (_previewReplaced.Count >= MaxPreviews) _previewReplaced.Clear();
+        if (_previewReplaced.Count >= MaxPreviews) { _previewReplaced.Clear(); _previewFailed.Clear(); }
         _previewReplaced[key] = files;
+        if (failure is not null) _previewFailed[key] = failure;
         Changed(string.Empty);
         return files;
     }
@@ -105,6 +129,7 @@ public sealed partial class ShellViewModel
     {
         var path = FolderFor(mod);
         var count = ReplacedBy(mod).Count;
+        if (_previewFailed.TryGetValue(PreviewKey(mod), out var reason)) return S.Format("mods.preview_unreadable", ("path", path), ("reason", reason));
         return count > 0 ? Counted("mods.preview_replaces", count, ("path", path)) : S.Format("mods.preview_into", ("path", path));
     }
 

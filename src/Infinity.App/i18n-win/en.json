@@ -1,5 +1,6 @@
 {
   "mods.preview_into": "Installs into {path}",
+  "mods.preview_unreadable": "Installs into {path} · the files it would replace could not be read ({reason})",
   "mods.preview_replaces": "Installs into {path} · replaces {count} files (backed up, restored on disable or uninstall)",
   "mods.preview_replaces_one": "Installs into {path} · replaces 1 file (backed up, restored on disable or uninstall)",
   "mods.install_replacing": "Replace {count} files and install",
